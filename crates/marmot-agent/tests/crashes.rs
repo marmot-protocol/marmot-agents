@@ -161,16 +161,6 @@ async fn settled_by(chat: &Chat<'_>, request: &EventKey, seconds: u64) -> AgentE
     .await
 }
 
-/// Waits until the core has no send queued: each it made has gone to MDK and is done. A send MDK
-/// keeps queued for a moment is asked after again, later, so what a test does to MDK meanwhile can
-/// meet that send in place of the next one.
-async fn nothing_queued(world: &World) {
-    let store = Store::new(world.state.path());
-    let queued =
-        || (json(&store.load().unwrap())["conversation"]["outbox"].as_array()).map(Vec::len);
-    within(20, || (queued() == Some(0)).then_some(())).await;
-}
-
 /// Seconds since 1970, as the core keeps when a send was first tried.
 fn unix_now() -> u64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
@@ -787,7 +777,7 @@ async fn a_send_mdk_no_longer_knows_is_told_as_not_known_after_someone_joins() {
         "told as not known: {}",
         told.header().text
     );
-    nothing_queued(&world).await;
+    world.nothing_queued().await;
     assert!(versions(&chat, "k").is_empty(), "the tool is not sent");
     core.stop().await;
     world.runtime.shutdown().await;
@@ -838,7 +828,7 @@ async fn a_send_whose_event_was_saved_is_told_as_not_known_when_mdk_no_longer_kn
         "told as not known: {}",
         told.header().text
     );
-    nothing_queued(&world).await;
+    world.nothing_queued().await;
     assert!(versions(&chat, "k").is_empty(), "the tool is not sent");
     core.stop().await;
     world.runtime.shutdown().await;
@@ -902,7 +892,7 @@ async fn a_send_an_older_core_handed_over_goes_on_as_mdk_took_it_after_someone_j
 
     let (driver, events, _) = stub(false);
     let core = world.start(driver);
-    nothing_queued(&world).await;
+    world.nothing_queued().await;
     events
         .send(Emitted {
             event: event("t", State::Done, turn()),
@@ -1785,7 +1775,7 @@ async fn an_item_whose_first_event_disappeared_goes_on_as_a_new_one() {
     events.send(emit(State::Running)).unwrap();
     let first = within(20, || firsts().into_iter().next()).await;
     // Only once MDK is done with it: a send MDK still has queued could go out after the sweep.
-    nothing_queued(&world).await;
+    world.nothing_queued().await;
     // The first event's time comes: MDK's sweep takes the clock it is given.
     let later = (unix_now() + 3600) * 1000;
     let mut gone = false;
@@ -1996,7 +1986,7 @@ impl Stub {
 /// core has nothing queued: else a send still queued, which the core asks MDK about again, would
 /// meet it in place of the one the test means.
 async fn dropped_next(world: &World, give_up: bool) {
-    nothing_queued(world).await;
+    world.nothing_queued().await;
     let fault = if give_up {
         Fault::Reject
     } else {

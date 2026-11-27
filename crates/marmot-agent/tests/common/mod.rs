@@ -375,6 +375,18 @@ impl World {
         })
         .await
     }
+
+    /// Waits until the core has no send queued: each it made has gone to MDK and is done. A send
+    /// MDK keeps queued for a moment is asked after again, later, so what a test does to MDK
+    /// meanwhile — a fault or a retention sweep — can meet that send in place of the next one.
+    pub async fn nothing_queued(&self) {
+        let store = Store::new(self.state.path());
+        let queued = || {
+            let state = serde_json::to_value(store.load().unwrap()).unwrap();
+            state["conversation"]["outbox"].as_array().map(Vec::len)
+        };
+        within(20, || (queued() == Some(0)).then_some(())).await;
+    }
 }
 
 impl Running {
