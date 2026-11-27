@@ -4401,3 +4401,29 @@ only a file quotes no text. Naming them would add to a socket message, and is le
 
 Decided 2026-11-27. The builder recommended it, as what a harness is handed, and the project owner accepted it
 that day.
+
+## D-188 A quote names the files of the message it quotes
+
+**Decision.** After the text of a reply's quote
+([D-187](#d-187-a-quote-holds-the-first-2000-characters-of-a-message)) comes a line for each file the quoted
+message carried, with its name and type: `[file: plan.txt (text/plain)]`. A message that was only a file is
+quoted by those lines alone. At most 16 files are named, and `[and more files]` follows when there were more;
+a name or a type over 200 characters is cut there, and ends in `…`.
+The core reads them from the message's own tags and fetches nothing. A message the chat no longer shows names
+none ([D-185](#d-185-a-replys-quote-is-what-the-chat-shows-now-and-a-message-no-longer-shown-is-quoted-without-its-text)).
+
+**Why.** A reply to a message that was only a file, "change this one", gave the harness an empty quote, so it
+could not tell what was meant. The name and type are what the chat shows of a file, and what the connectors
+this project replaces passed on, with the same limit of 16
+([#267](https://github.com/marmot-protocol/marmot-agents/issues/267)). The file itself is not passed: the core
+passes no files to a harness yet ([D-083](#d-083-the-core-passes-no-files-to-a-harness-yet)).
+
+**In the text, not a field.** The recommendation the project owner accepted was a list of files on the socket's
+`reply_to`. Built, it is lines in the quote's text instead, as the two entries before this one did it: every
+driver and connector already hands the text to its harness, so none of them changes, and the socket's messages
+stay as they are. The cost is that a connector cannot tell a file's line from the message's own words. None
+reads a quote for anything but showing it to the model. If one comes to need the list, a field can be added
+beside the text then.
+
+Decided 2026-11-27. The project owner accepted the builder's recommendation to name the files; the builder
+chose the form.

@@ -312,7 +312,8 @@ hello it cannot read, such as a `folder` that is not a whole path.
 `sender` (`id`, `name`), `attachments` (`path`, `name`, `media_type`), and when there are any, `reply_to`
 (`message`, `text`, `author`) and `session`. The `text` is what the chat shows now, and `[this message was deleted]`
 or `[this message is not available]` for a message it no longer shows, and the first 2,000 characters of a
-longer one, ending in `…` ([D-187](../decisions.md#d-187-a-quote-holds-the-first-2000-characters-of-a-message)) ([D-185](../decisions.md#d-185-a-replys-quote-is-what-the-chat-shows-now-and-a-message-no-longer-shown-is-quoted-without-its-text)). `folder` is a whole path, links resolved: the connector starts
+longer one, ending in `…` ([D-187](../decisions.md#d-187-a-quote-holds-the-first-2000-characters-of-a-message)), and after it a line for each file the
+message had, `[file: <name> (<type>)]` ([D-188](../decisions.md#d-188-a-quote-names-the-files-of-the-message-it-quotes)) ([D-185](../decisions.md#d-185-a-replys-quote-is-what-the-chat-shows-now-and-a-message-no-longer-shown-is-quoted-without-its-text)). `folder` is a whole path, links resolved: the connector starts
 the chat's next session there, and leaves a running one where it is (provisional, D-101).
 
 **`answer`**: `request`, `item`, `by` (`id`, `name`) and `given`: `{"choice": <id>}` for an approval, or

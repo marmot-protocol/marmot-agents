@@ -1183,6 +1183,61 @@ async fn a_quote_of_a_deleted_message_has_no_text_and_an_edited_one_its_new_text
     world.runtime.shutdown().await;
 }
 
+// #267. A quote says what files the quoted message had, by name and type, so a reply to a message
+// that was only a file still says what it is about. Nothing of a file is fetched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_quote_names_the_files_of_the_message_it_quotes() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let core = world.start(Listener {
+        prompts: prompts.clone(),
+    });
+    let chat = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    world.joined(&chat).await;
+    let heard = |n: usize| {
+        let prompts = prompts.clone();
+        eventually(move || prompts.lock().unwrap().get(n).cloned())
+    };
+    let file = marmot_app::MediaUploadRequest {
+        attachments: vec![marmot_app::MediaUploadAttachmentRequest {
+            file_name: "plan.txt".into(),
+            media_type: "text/plain".into(),
+            plaintext: b"step one".to_vec(),
+            dim: None,
+            thumbhash: None,
+        }],
+        caption: None,
+        send: true,
+        blossom_server: None,
+        message_tags: Vec::new(),
+    };
+    let sent = (world.runtime)
+        .upload_media(&world.person, &chat, file)
+        .await
+        .unwrap()
+        .sent
+        .expect("the file was sent");
+    heard(0).await;
+    (world.runtime)
+        .reply_to_message(
+            &world.person,
+            &chat,
+            &sent.message_ids[0],
+            "change this one",
+        )
+        .await
+        .unwrap();
+    let quoted = heard(1).await.reply_to.expect("the quote");
+    assert_eq!(quoted.text, "[file: plan.txt (text/plain)]");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 // An edit whose token names no edits, as the core gives one for words an older core sent without
 // a token, goes out as MDK's plain edit of the message: the person sees the new text in the
 // message's place.
