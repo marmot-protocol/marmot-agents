@@ -22,6 +22,8 @@ import threading
 import time
 from pathlib import Path
 
+import publish_recording
+
 TURN_TIMEOUT = 240
 
 
@@ -809,15 +811,16 @@ def main():
     if len(sys.argv) != 4 or sys.argv[1] not in SCENARIOS:
         sys.exit(__doc__)
     name, cwd, out = sys.argv[1], str(Path(sys.argv[2]).resolve()), Path(sys.argv[3])
-    s = AppServer(out)
-    try:
-        SCENARIOS[name](s, cwd)
-        time.sleep(1.0)  # let trailing notifications arrive
-        print(f"{name}: ok")
-    except Exception as e:  # noqa: BLE001 - report and keep what was recorded
-        print(f"{name}: FAILED: {type(e).__name__}: {e}")
-    finally:
-        s.close()
+    with publish_recording.recording(out) as raw:
+        s = AppServer(raw)
+        try:
+            SCENARIOS[name](s, cwd)
+            time.sleep(1.0)  # let trailing notifications arrive
+        except Exception as e:  # noqa: BLE001 - report it; nothing is written
+            sys.exit(f"{name}: FAILED: {type(e).__name__}: {e}; nothing was written")
+        finally:
+            s.close()
+    print(f"{name}: ok")
 
 
 if __name__ == "__main__":

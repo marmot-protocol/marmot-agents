@@ -477,7 +477,7 @@ python3 tools/record/inventory.py fixtures/recordings/acp/cursor --kinds     # n
 python3 tools/record/inventory.py fixtures/recordings/acp/antigravity --kinds  # nor this
 python3 tools/record/inventory.py fixtures/recordings/pi --kinds             # nor this
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
-python3 -m unittest discover -s tools/record -p 'test_*.py'            # the scrubber and the gateway recorders
+python3 -m unittest discover -s tools/record -p 'test_*.py'            # the scrubber and the recorders (Node 24)
 shellcheck -x tools/record/*/record.sh tools/record/publish-recording.sh   # CI does not run this
 python3 -m unittest discover -s tools/model_double -p 'test_*.py'      # the model double's wire formats
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \

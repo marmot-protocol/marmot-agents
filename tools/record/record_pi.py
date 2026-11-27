@@ -31,6 +31,7 @@ import threading
 import time
 from pathlib import Path
 
+import publish_recording
 import tests_env
 
 TURN_TIMEOUT = 300
@@ -370,8 +371,8 @@ def main():
     tests_env.need(*tests_env.NAMES)
     name, project, out = sys.argv[1:4]
     key = os.environ["MODEL_KEY_FILE"]
-    with tempfile.TemporaryDirectory(prefix="pi-state-") as state:
-        pi = Pi(Path(out), str(Path(project).resolve()), str(Path(key).resolve()), state, EXTRA.get(name))
+    with tempfile.TemporaryDirectory(prefix="pi-state-") as state, publish_recording.recording(out) as raw:
+        pi = Pi(raw, str(Path(project).resolve()), str(Path(key).resolve()), state, EXTRA.get(name))
         try:
             SCENARIOS[name](pi)
         finally:

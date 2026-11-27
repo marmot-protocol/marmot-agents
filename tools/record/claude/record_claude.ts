@@ -18,8 +18,8 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { createWriteStream, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { createWriteStream, mkdtempSync, openSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type Msg = Record<string, any>;
@@ -349,13 +349,23 @@ async function main() {
     process.exit(2);
   }
 
-  const file = createWriteStream(out, { encoding: "utf-8" });
+  // Written owner-only in an owner-only folder beside the destination, and renamed over it only once the
+  // scenario has finished, so a run that fails or is interrupted leaves the destination as it was.
+  const work = mkdtempSync(join(dirname(out), `.${basename(out)}.`));
+  const raw = join(work, basename(out));
+  const discard = () => rmSync(work, { recursive: true, force: true });
+  process.once("SIGINT", () => {
+    discard();
+    process.exit(130);
+  });
+  const file = createWriteStream(raw, { fd: openSync(raw, "wx", 0o600), encoding: "utf-8" });
   const t0 = performance.now();
   const record = (dir: "in" | "out", via: string, msg: Msg) =>
     file.write(JSON.stringify({ t: Math.round(performance.now() - t0), dir, via, msg }) + "\n");
 
   let sessionId: string | undefined;
   let status = "ok";
+  let timedOut = false;
 
   const runQuery = async (promptList: Prompt[], extra: Msg) => {
     const inbox = new Inbox();
@@ -406,6 +416,7 @@ async function main() {
     const ctx: Ctx = { q, abort, inbox, record, state: {} };
 
     const timer = setTimeout(() => {
+      timedOut = true;
       record("out", "call", { method: "timeout" });
       inbox.close();
       q.interrupt?.().catch(() => {});
@@ -432,10 +443,22 @@ async function main() {
     clearTimeout(timer);
   };
 
-  await runQuery(scenario.prompts, {});
-  if (scenario.resumeWith) await runQuery(scenario.resumeWith, { resume: sessionId });
-  if (scenario.thenNew) await runQuery(scenario.thenNew, {});
-  await new Promise((r) => file.end(r));
+  // An error the harness ends a query with is part of what some scenarios record; the recorder giving up
+  // on one, or an error of its own, is not.
+  try {
+    await runQuery(scenario.prompts, {});
+    if (scenario.resumeWith) await runQuery(scenario.resumeWith, { resume: sessionId });
+    if (scenario.thenNew) await runQuery(scenario.thenNew, {});
+    await new Promise((r) => file.end(r));
+    if (timedOut) {
+      console.error(`${name}: FAILED: timed out; nothing was written`);
+      process.exitCode = 1;
+      return;
+    }
+    renameSync(raw, out);
+  } finally {
+    discard();
+  }
   console.log(`${name}: ${status}`);
 }
 
