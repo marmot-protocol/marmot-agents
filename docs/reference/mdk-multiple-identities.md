@@ -4,7 +4,8 @@ This page is detailed on purpose. It records what MDK supports today for running
 one process, so that the choice between "one program for all of an owner's agents" and "one program per agent"
 ([Q-08](../open-questions.md#q-08-how-do-several-agent-identities-run-together)) can be made on facts.
 
-- **Read at:** MDK commit `a2d3486ac`, on 2026-11-17.
+- **Read at:** MDK commit `a2d3486ac`, on 2026-11-17. That revision, the merge of MDK pull request 3484, is no
+  longer on MDK's history, which was rewritten on 2026-11-24 (noted on 2026-11-27).
 - **How:** a research agent read the code and reported with file and line references. The points marked
   "checked" were then confirmed directly. The rest were not re-checked. Points marked "inferred" are conclusions,
   not statements found in the code.

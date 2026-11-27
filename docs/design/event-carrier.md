@@ -4,7 +4,8 @@ Status: decided on 2026-11-17, as [D-022](../decisions.md#d-022-the-agents-words
 to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). Who applies the size limit was decided on
 2026-11-19, as [D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit). None of it is in the Marmot
 specification yet, and all of it has to be agreed there
-([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are in
+([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)); it is proposed there as one feature
+document ([D-184](../decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)). The exact tags are in
 [kinds 1201 and 1202](agent-kinds.md) ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)). What
 the core cuts beyond the two steps under "the size limit" is provisional, as noted there. MDK carries all of it
 since 2026-11-22 (MDK pull request 3613), and the core sends it
@@ -25,7 +26,9 @@ changes is updated.
 
 ## What Marmot gives us today
 
-Read from the Marmot specification at commit `162c61b` and MDK at `a2d3486ac`, both on 2026-11-17.
+Read from the Marmot specification at commit `162c61b` and MDK at `a2d3486ac`, both on 2026-11-17. That MDK
+revision, the merge of MDK pull request 3484, is no longer on MDK's history, which was rewritten on 2026-11-24.
+What MDK has changed since is in the sections below.
 
 | Fact | Consequence |
 | --- | --- |
@@ -44,7 +47,7 @@ Read from the Marmot specification at commit `162c61b` and MDK at `a2d3486ac`, b
 
 ### What kinds 1201 and 1202 carry today
 
-Read from MDK at `a2d3486ac` on 2026-11-19. Older connector releases were not checked.
+Read from MDK at `a2d3486ac` (above) on 2026-11-19. Older connector releases were not checked.
 
 Today's `wn-agent` adds nothing to these events. A connector hands it the fields and MDK builds the event.
 
@@ -99,7 +102,8 @@ The agent decides, per event, whether it should alert people
 | Everything else: tool calls, reasoning, plans, tasks, notices, a turn starting or finishing normally | No |
 
 MDK alerts this way since 2026-11-22: for a version of an item that is a waiting approval or question, or a
-failed turn, once each, and for nothing else of kind 1201 or 1202. The waiting approval matters because Codex and
+failed turn, when it is the item's current version, keyed by the item's first event, and for nothing else of
+kind 1201 or 1202. The waiting approval matters because Codex and
 Claude Code wait for an answer with no time limit.
 
 A failed turn arrives as an edit of the turn item. Edits are otherwise silent, so this is the one edit that
@@ -139,8 +143,11 @@ A client should also not mark an agent item as "edited". The item changing state
 ### What this costs
 
 An edit means nothing without the event it points at. Someone added to the group in the middle of a turn cannot
-read the item's first event, so they see nothing of that item, however many edits follow. They see the agent's
-answer, because that is a chat message, and every item that starts after they joined.
+read the item's first event. As first designed, they saw nothing of that item, however many edits followed. Since
+an edit carries the whole item, an app now shows a held edit of an item sent before the member joined as the item
+itself ([D-124](../decisions.md#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners)),
+and MDK does since its pull request 3640. What they still miss is every version before the first one they
+received.
 
 ### The earlier draft, and why this replaced it
 
@@ -157,9 +164,9 @@ exist, and they behave better in apps that have not been updated: see
 | Item type, and kind of tool | a tag | `tool`, `command` |
 | State | a tag | `done` |
 | Turn and session | tags | |
-| Position within the turn | a tag | `6` |
-| Harness and its version | a tag | `codex`, `0.169.0` |
-| The message that started the turn | an `e` tag, as replies use | |
+| Position within the session | a tag, `seq` ([D-059](../decisions.md#d-059-eight-points-about-what-an-agent-event-carries)) | `6` |
+| Harness | a tag; its version is in the session item's body | `codex` |
+| On a turn, the message that started it | a `started_by` tag ([D-112](../decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)) | |
 | The type's own fields | a tag holding JSON | the command, exit code, output |
 | The harness's native message | a tag holding JSON | |
 
@@ -170,7 +177,9 @@ part an edit already replaces.
 
 ### A number gives the order within a turn
 
-Each agent item carries its position within its turn: 1, 2, 3. Clients order a turn's items by it.
+Each agent item carries its position among its session's events: 1, 2, 3
+([D-059](../decisions.md#d-059-eight-points-about-what-an-agent-event-carries)). Clients order a turn's items by
+it.
 
 Without it, order is undefined. `created_at` counts whole seconds, and an agent often produces several items in
 one second. MDK would then fall back to ordering by event id, which is effectively random.

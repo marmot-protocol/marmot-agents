@@ -145,8 +145,8 @@ Built so far, provisional until the owner accepts what others can see:
   so it is MDK's plain edit, which shows the same words again if tried after a lost answer
   ([D-142](decisions.md#d-142-how-subagent-threads-are-built), point 4). See
   [sends that give up](design/verification.md#first-fix-what-is-known).
-- **Subagents as threads.** On MDK master at `029e0579f`, which places agent items in threads (MDK pull
-  requests 3622, 3630 and 3640), a driver names the subagent each event belongs to, and the core puts it in that
+- **Subagents as threads.** On MDK with pull requests 3622, 3630 and 3640, which place agent items in threads
+  (in `bea7b400`, the revision the core uses), a driver names the subagent each event belongs to, and the core puts it in that
   subagent's thread with NIP-22's tags; edits repeat the root's, and the subagent's words are thread messages.
   Codex's driver says its harness tells subagents apart; the others do not, and are unchanged. Not built yet:
   writing to a running subagent, which no driver allows, and a Stop that stops only one subagent
