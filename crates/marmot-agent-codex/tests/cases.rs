@@ -8,8 +8,18 @@ use marmot_agent_events::{AgentEvent, Body, State};
 
 const PASSWORD: &str = "hunter2";
 
-fn feed(messages: &[(Direction, &str)]) -> Vec<AgentEvent> {
+/// A translator whose session is `th1`, which most cases name: a translator makes no event for a
+/// thread before its session is picked (D-060).
+fn bound() -> Translator {
     let mut translator = Translator::new();
+    translator.feed(Direction::Out, PICK);
+    translator.feed(Direction::In, &thread("th1"));
+    translator
+}
+
+/// The events `messages` make in a [`bound`] translator.
+fn feed(messages: &[(Direction, &str)]) -> Vec<AgentEvent> {
+    let mut translator = bound();
     let events = messages
         .iter()
         .flat_map(|(direction, message)| translator.feed(*direction, message))
@@ -182,7 +192,7 @@ fn a_command_codex_never_closed_is_closed_with_no_native_message() {
 #[test]
 fn a_harness_that_stops_mid_turn_closes_the_turn() {
     let started = r#"{"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "inProgress", "error": null}}}"#;
-    let mut translator = Translator::new();
+    let mut translator = bound();
     translator.feed(Direction::In, started);
     let closed = translator.harness_stopped();
     assert_eq!(closed.len(), 1);
@@ -304,7 +314,7 @@ fn a_late_end_of_an_older_turn_closes_only_that_turn() {
             r#"{{"method": "item/started", "params": {{"threadId": "th1", "turnId": "{turn}", "item": {{"type": "commandExecution", "id": "{id}", "command": "sleep 60", "cwd": "/w", "status": "inProgress"}}}}}}"#
         )
     };
-    let mut translator = Translator::new();
+    let mut translator = bound();
     let start = r#"{"id": 1, "method": "turn/start", "params": {"threadId": "th1", "input": []}}"#;
     translator.feed(Direction::Out, start);
     for message in [
@@ -421,7 +431,7 @@ fn a_permission_request_is_granted_for_a_scope_or_denied() {
 
 #[test]
 fn a_turn_end_the_driver_cannot_read_closes_nothing() {
-    let mut translator = Translator::new();
+    let mut translator = bound();
     let started = r#"{"method": "item/started", "params": {"threadId": "th1", "turnId": "t1", "item": {"type": "commandExecution", "id": "cmd1", "command": "make", "cwd": "/w", "status": "inProgress"}}}"#;
     translator.feed(Direction::In, started);
     let odd = r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "completed", "error": "a string where an object goes"}}}"#;
@@ -506,7 +516,7 @@ fn a_restarted_codex_reusing_a_request_id_makes_a_new_approval() {
             r#"{{"id": 0, "method": "item/commandExecution/requestApproval", "params": {{"threadId": "th1", "turnId": "{turn}", "itemId": "c", "command": "ls"}}}}"#
         )
     };
-    let mut translator = Translator::new();
+    let mut translator = bound();
     let first = translator.feed(Direction::In, &asked("t1"));
     translator.harness_stopped();
     let second = translator.feed(Direction::In, &asked("t2"));
@@ -597,14 +607,18 @@ fn a_refused_request_and_an_error_notice_are_different_items() {
 
 #[test]
 fn a_session_the_chat_goes_back_to_runs_again() {
-    let events = feed(&[
-        (Direction::Out, PICK),
-        (Direction::In, &thread("th1")),
-        (Direction::Out, PICK),
-        (Direction::In, &thread("th2")),
-        (Direction::Out, PICK),
-        (Direction::In, &thread("th1")),
-    ]);
+    let mut translator = Translator::new();
+    let events: Vec<AgentEvent> = [
+        (Direction::Out, PICK.to_string()),
+        (Direction::In, thread("th1")),
+        (Direction::Out, PICK.to_string()),
+        (Direction::In, thread("th2")),
+        (Direction::Out, PICK.to_string()),
+        (Direction::In, thread("th1")),
+    ]
+    .iter()
+    .flat_map(|(direction, message)| translator.feed(*direction, message))
+    .collect();
     let th1: Vec<State> = events
         .iter()
         .filter(|e| e.header().item.as_str() == "session:th1")
@@ -784,4 +798,103 @@ fn a_message_with_no_params_makes_up_no_native_message() {
     let replies = translator.take_replies();
     assert_eq!(replies.len(), 1, "the request is refused");
     assert!(replies[0].contains("\"error\""));
+}
+
+// What Codex says of a thread before the reply to `thread/start` picks the session is another
+// thread's (D-060): it is counted, and neither shows a session nor gives the one picked its
+// settings. Here thread `thB` reports a model before the reply picks `th1`, which names none
+// (#37).
+#[test]
+fn a_thread_reported_before_the_session_is_picked_gives_it_nothing() {
+    let mut translator = Translator::new();
+    let early = r#"{"method": "thread/started", "params": {"thread": {"id": "thB", "model": "test-model"}}}"#;
+    assert!(translator.feed(Direction::In, early).is_empty());
+    translator.feed(Direction::Out, PICK);
+    let picked = translator.feed(Direction::In, &thread("th1"));
+    let [session] = &picked[..] else {
+        panic!("the session item alone: {picked:?}");
+    };
+    assert_eq!(session.header().item.as_str(), "session:th1");
+    let Body::Session(session) = session.body() else {
+        panic!("a session");
+    };
+    let model = session.settings.iter().find(|s| s.id == "model");
+    assert_eq!(model.and_then(|s| s.value.as_deref()), None);
+    assert_eq!(translator.other_threads(), 1);
+}
+
+// Codex counts its requests from 0 again when it restarts. A request in no turn that reuses an
+// earlier one's id is a new item, and answering it leaves the earlier one's card as it was (#37).
+#[test]
+fn a_restarted_codex_reusing_the_id_of_a_request_in_no_turn_makes_a_new_card() {
+    let asked = r#"{"id": 0, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "serverName": "demo", "mode": "form", "_meta": {"codex_approval_kind": "mcp_tool_call"}, "message": "Allow?", "requestedSchema": {"type": "object", "properties": {}}}}"#;
+    let mut translator = bound();
+    let first = translator.feed(Direction::In, asked);
+    translator.harness_stopped();
+    let second = translator.feed(Direction::In, asked);
+    let item = |events: &[AgentEvent]| events[0].header().item.as_str().to_string();
+    assert_ne!(item(&first), item(&second));
+    let answer = r#"{"id": 0, "result": {"action": "accept", "content": null}}"#;
+    let answered = translator.feed(Direction::Out, answer);
+    let items: Vec<&str> = answered.iter().map(|e| e.header().item.as_str()).collect();
+    assert_eq!(items, [item(&second)]);
+}
+
+/// A subagent's turn, as its own thread `sub1` reports it.
+fn sub_turn(method: &str, turn: &str) -> String {
+    format!(
+        r#"{{"method": "{method}", "params": {{"threadId": "sub1", "turn": {{"id": "{turn}", "rootTurnId": "t1", "items": [], "status": "completed", "error": null}}}}}}"#
+    )
+}
+
+/// The subject of the subagent's row, in the last of `events` that shows it.
+fn subject(events: &[AgentEvent]) -> Option<String> {
+    (events.iter().rev()).find_map(|e| match e.body() {
+        Body::Task(task) => Some(task.subject.as_ref().map(|s| s.as_str().to_string())),
+        _ => None,
+    })?
+}
+
+// A subagent's turn can start before the item that gives it its work: it shows the work of the
+// turn before until that item comes, and then that item's, as do its words. Codex names each item
+// twice, at its start and its end, and an end read late gives no work: not the newest item's,
+// nor an older one's (#146).
+#[test]
+fn work_given_after_a_subagents_turn_started_is_that_turns() {
+    let mut sub = Translator::subagent("sub1", Some("th1"), None);
+    let mut events = sub.given_work("a1", Some("/root/a"));
+    events.extend(sub.feed(Direction::In, &sub_turn("turn/started", "st1")));
+    assert_eq!(subject(&events).as_deref(), Some("a1"));
+    sub.feed(Direction::In, &sub_turn("turn/completed", "st1"));
+
+    let events = sub.feed(Direction::In, &sub_turn("turn/started", "st2"));
+    assert_eq!(subject(&events).as_deref(), Some("a1"), "until a2 comes");
+    let events = sub.given_work("a2", Some("/root/b"));
+    assert_eq!(
+        subject(&events).as_deref(),
+        Some("a2"),
+        "the running turn's"
+    );
+    let Some(Body::Task(task)) = events.last().map(AgentEvent::body) else {
+        panic!("the row");
+    };
+    assert_eq!(
+        task.description.as_deref(),
+        Some("/root/b"),
+        "and what a2 is for"
+    );
+    let said = r#"{"method": "item/completed", "params": {"threadId": "sub1", "turnId": "st2", "item": {"type": "agentMessage", "id": "w2", "text": "done", "phase": "final_answer"}}}"#;
+    let words = sub.feed(Direction::In, said);
+    let Body::Message(message) = words[0].body() else {
+        panic!("its words");
+    };
+    assert_eq!(message.parent.as_ref().map(|p| p.as_str()), Some("a2"));
+
+    // Each item's end, a1's read late: neither gives the next turn work.
+    assert!(sub.given_work("a2", Some("/root/b")).is_empty());
+    assert!(sub.given_work("a1", Some("/root/a")).is_empty());
+    let events = sub.feed(Direction::In, &sub_turn("turn/completed", "st2"));
+    assert_eq!(subject(&events).as_deref(), Some("a2"));
+    let events = sub.feed(Direction::In, &sub_turn("turn/started", "st3"));
+    assert_eq!(subject(&events).as_deref(), Some("a2"), "not a1 again");
 }

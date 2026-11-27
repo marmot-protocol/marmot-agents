@@ -1,4 +1,4 @@
-use super::{Direction, Translator, native, notice, owner, show};
+use super::{Direction, Translator, native, notice, owner};
 use crate::messages::{
     ApprovalReply, ApprovalRequest, Elicitation, Envelope, Id, QuestionReply, UserInput,
 };
@@ -423,10 +423,13 @@ impl Translator {
     }
 
     /// The item for a request from Codex. Codex counts its requests from 0 again when it restarts,
-    /// so the id names the turn as well, which keeps it unique.
+    /// so the id names the turn as well, which keeps it unique. A request in no turn is numbered
+    /// as well, like every item the driver names (#37).
     fn request_item(&self, kind: &str, turn: Option<&str>, id: Option<&Id>) -> String {
-        let turn = turn.or(self.turn.as_deref());
-        format!("{kind}:{}:{}", show(turn), show_id(id))
+        match turn.or(self.turn.as_deref()) {
+            Some(turn) => format!("{kind}:{turn}:{}", show_id(id)),
+            None => self.made_up(&format!("{kind}:None:{}", show_id(id))),
+        }
     }
 
     /// A request of Codex's that Codex said was resolved before the driver could show it, as one
