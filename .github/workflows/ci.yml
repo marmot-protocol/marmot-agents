@@ -606,7 +606,7 @@ jobs:
         run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/prototype.xml" -s tools/prototype -p 'test_*.py'
 
       - name: The scrubber and the gateway recorders write nothing that failed
-        run: python3 -m unittest discover -s tools/record -p 'test_*.py'
+        run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/record.xml" -s tools/record -p 'test_*.py'
 
       - name: The model double reads and writes each wire format
         run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/model-double.xml" -s tools/model_double -p 'test_*.py'

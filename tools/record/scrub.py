@@ -108,7 +108,7 @@ class Scrubber:
             msg = antigravity_scrub(msg)
         def homes(v):
             if isinstance(v, dict):
-                return {k: homes(x) for k, x in v.items()}
+                return {homes(k): homes(x) for k, x in v.items()}
             if isinstance(v, list):
                 return [homes(x) for x in v]
             if isinstance(v, str):
@@ -327,7 +327,8 @@ def main() -> int:
                     rec["msg"] = getattr(s, harness)(rec["msg"])
                 kept = {**kept_as_is, **rec["msg"]} if harness == "cassettes" else rec
                 lines.append(json.dumps(kept, ensure_ascii=False, sort_keys=False))
-                for text, is_key in strings(kept):
+                # Everything written is checked, except a cassette header's own fields (`rec` leaves them out).
+                for text, is_key in strings(rec):
                     for kind in s.findings(text):
                         problems += 1
                         where = ", in a key" if is_key else ""
