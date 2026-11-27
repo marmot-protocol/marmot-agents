@@ -23,7 +23,7 @@ mod session;
 use self::interactions::Pending;
 use crate::messages::{
     self, Envelope, ErrorNote, Id, Message as NativeMessage, RequestResolved, Rerouted,
-    ThreadSettingsUpdated, ThreadStarted, TokenUsageUpdated, Tokens, TurnNote,
+    ThreadNameUpdated, ThreadSettingsUpdated, ThreadStarted, TokenUsageUpdated, Tokens, TurnNote,
 };
 use crate::send::{self, Setup};
 use marmot_agent_driver::{Action as DriverAction, Prompt, Reason, Refusal};
@@ -89,6 +89,8 @@ struct Known {
     sandbox: Option<String>,
     mode: Option<String>,
     version: Option<String>,
+    /// The thread's name, which is the session's title (D-177).
+    title: Option<String>,
 }
 
 /// A request the client sent: its method, and the session and turn it was sent in.
@@ -495,6 +497,16 @@ impl Translator {
                         return;
                     }
                     self.thread_settings(&thread, method, params, out);
+                }
+                "thread/name/updated" => {
+                    let Some(p) = self.read::<ThreadNameUpdated>(method, params) else {
+                        return;
+                    };
+                    if self.for_another_thread(p.thread_id.as_deref()) || self.session.is_none() {
+                        return;
+                    }
+                    self.known.title = p.thread_name;
+                    self.thread_settings(&messages::Settings::default(), method, params, out);
                 }
                 "thread/settings/updated" => {
                     let Some(p) = self.read::<ThreadSettingsUpdated>(method, params) else {

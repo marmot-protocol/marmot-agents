@@ -461,3 +461,43 @@ fn other_field_stays_a_separate_question_for_other_harnesses() {
     assert!(!q.questions()[0].allow_text);
     assert_eq!(q.questions()[1].id, "q1_other");
 }
+
+/// The titles the session items `events` show, in order.
+fn titles(events: &[AgentEvent]) -> Vec<Option<String>> {
+    events
+        .iter()
+        .filter_map(|e| match e.body() {
+            Body::Session(s) => Some(s.title.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// D-177: the session's title is the agent's, from `session_info_update`. A null clears it, and an
+// update that says nothing of a title, as Goose sends around each turn, or one for another
+// session, leaves it as it is. Each change is an edit of the session item; a repeat is none.
+#[test]
+fn a_session_info_update_sets_and_clears_the_sessions_title() {
+    let (mut acp, _) = started();
+    let info = |session: &str, update: &str| {
+        format!(
+            r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"{session}","update":{{"sessionUpdate":"session_info_update"{update}}}}}}}"#
+        )
+    };
+    let events: Vec<AgentEvent> = [
+        info("s1", r#","title":"Fix the build""#),
+        info("s1", r#","title":"Fix the build""#),
+        info("s1", r#","_meta":{"goose":{"activeRunId":null}}"#),
+        info("s2", r#","title":"Another session""#),
+        info("s1", r#","title":null"#),
+    ]
+    .iter()
+    .flat_map(|m| acp.feed(Direction::In, m))
+    .collect();
+    assert_eq!(titles(&events), [Some("Fix the build".into()), None]);
+    assert!(
+        events
+            .iter()
+            .all(|e| e.header().item.as_str() == "session:s1")
+    );
+}

@@ -6,7 +6,8 @@
 The recordings are the test of the prototype, and `translate.py --check` runs them all. This file
 covers cases that were never recorded: a Codex question marked secret, a question asked in a message
 that outlives its turn, a translator that follows one thread, Claude Code's answer to a question with
-several choices or with typed text, what Claude Code's client learns before the session has an id, an
+several choices or with typed text, what Claude Code's client learns before the session has an id and
+the session's title, an
 ACP message streamed with no id, for Pi, a prompt sent as a turn ends and a new session an extension
 cancels, and for Hermes, a direct chat's approval while another chat's turn runs.
 The messages below are written by hand, in the shapes the recordings have: for Codex, the shape
@@ -296,6 +297,21 @@ class ClaudeSessionItem(unittest.TestCase):
             "type": "system", "subtype": "init", "session_id": "s1", "claude_code_version": "9.9.9", "slash_commands": ["cost"]}})
         self.assertEqual(translate.crate_shape(claude.events[0])["body"]["commands"], [{"name": "cost", "hint": ""}])
 
+    def test_the_sessions_title_is_claude_codes_and_one_before_the_init_waits_for_it(self):
+        """D-177. No recording holds `session_title_changed`; its shape is the one in
+        `docs/reference/data/claude-sdk-message-structures.txt`. A change is an edit, a repeat none."""
+        claude = translate.Claude()
+        title = lambda t: {"dir": "in", "via": "message", "msg": {
+            "type": "system", "subtype": "session_title_changed", "session_id": "s1", "title": t, "uuid": "u"}}
+        claude.feed(title("Fix the build"))
+        self.assertEqual(claude.events, [])
+        claude.feed({"dir": "in", "via": "message", "msg": {
+            "type": "system", "subtype": "init", "session_id": "s1", "claude_code_version": "9.9.9", "slash_commands": []}})
+        claude.feed(title("Fix the build"))
+        claude.feed(title("Fix the tests"))
+        titles = [e["body"].get("title") for e in claude.events if e["type"] == "session"]
+        self.assertEqual(titles, ["Fix the build", "Fix the tests"])
+
 
 class ClaudeApprovals(unittest.TestCase):
     """A reply settles the approval it answers, by the callback's request id when the driver recorded
@@ -392,6 +408,20 @@ class AcpTurns(unittest.TestCase):
     @staticmethod
     def turns(acp):
         return [(e["turn"], e["state"]) for e in acp.events if e["type"] == "turn"]
+
+    def test_a_session_info_update_sets_and_clears_the_sessions_title(self):
+        """D-177. A null clears the title; an update with no title, as Goose sends around each turn,
+        or one for another session, leaves it as it is."""
+        acp = self.started()
+        before = len(acp.events)
+        for session, update in [("s1", {"title": "Fix the build"}), ("s1", {"title": "Fix the build"}),
+                                ("s1", {"_meta": {"goose": {"activeRunId": None}}}), ("s2", {"title": "Another session"}),
+                                ("s1", {"title": None})]:
+            acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": session, "update": {"sessionUpdate": "session_info_update", **update}}}})
+        sessions = [e for e in acp.events[before:] if e["type"] == "session"]
+        self.assertEqual([e["body"].get("title") for e in sessions], ["Fix the build", None])
+        self.assertEqual({e["item"] for e in sessions}, {"session:s1"})
 
     def test_a_prompt_during_a_turn_and_its_refusal_leave_the_turn_running(self):
         acp = self.started()

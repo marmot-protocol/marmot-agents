@@ -22,6 +22,7 @@
 //! `result` or `error` of a reply, as the exact text that arrived. An event the driver makes up
 //! carries none.
 
+use agent_client_protocol_schema::MaybeUndefined;
 use agent_client_protocol_schema::v1::{
     ContentBlock, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationContentValue, ElicitationMode, ElicitationScope, InitializeResponse,
@@ -172,6 +173,8 @@ pub struct Translator {
     cancelled: bool,
     config: Vec<SessionConfigOption>,
     commands: Vec<Command>,
+    /// The session's title, as the agent last stated it (D-177).
+    title: Option<String>,
     /// Items each turn made with no id of the agent's.
     counted: HashMap<Option<String>, u64>,
     /// The id of the `session/prompt` that started the turn, by its key (`key`).
@@ -218,6 +221,7 @@ impl Translator {
             cancelled: false,
             config: Vec::new(),
             commands: Vec::new(),
+            title: None,
             counted: HashMap::new(),
             turn_request: None,
             todos: Vec::new(),
@@ -753,8 +757,21 @@ impl Translator {
                 self.config = update.config_options;
                 self.announce("session/update [config_option_update]", params, out);
             }
-            // The context window, whose use a turn's reply states; and the session's title.
-            SessionUpdate::UsageUpdate(_) | SessionUpdate::SessionInfoUpdate(_) => self.flush(out),
+            // The session's title, or null to clear it (D-177). Goose also sends one with no title.
+            SessionUpdate::SessionInfoUpdate(info) => {
+                self.flush(out);
+                let title = match info.title {
+                    MaybeUndefined::Undefined => return,
+                    MaybeUndefined::Null => None,
+                    MaybeUndefined::Value(title) => Some(title),
+                };
+                if self.session.as_deref() == Some(note.session_id.0.as_ref()) {
+                    self.title = title;
+                    self.announce("session/update [session_info_update]", params, out);
+                }
+            }
+            // The context window, whose use a turn's reply states.
+            SessionUpdate::UsageUpdate(_) => self.flush(out),
             other => {
                 self.flush(out);
                 let kind = serde_json::to_value(&other)
@@ -1509,6 +1526,7 @@ impl Translator {
             self.sessions.remove(&format!("session:{old}"));
             self.config.clear();
             self.commands.clear();
+            self.title = None;
         }
         self.session = Some(sid);
     }
@@ -1567,6 +1585,7 @@ impl Translator {
             settings,
             actions: Vec::new(),
             commands: self.commands.clone(),
+            title: self.title.clone(),
             ..Session::default()
         };
         let item = format!("session:{sid}");

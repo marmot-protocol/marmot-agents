@@ -232,7 +232,6 @@ const NOT_TOOLS = new Set<unknown>(["AskUserQuestion", "ExitPlanMode"]);
 const NOT_SENT_SYSTEM = new Set<unknown>([
   "thinking_tokens",
   "background_tasks_changed",
-  "session_title_changed",
   "vcs_state_changed",
   "code_change_published",
   "commands_changed",
@@ -303,6 +302,8 @@ export class Translator {
   private readonly approvalIds = new Map<unknown, string>();
   private settings: Json = {};
   private commands: Json[] = [];
+  /** The session's title, once Claude Code has given one (D-177). */
+  private title: string | null = null;
   private models: unknown[] | null = null;
   private version: unknown = null;
   private sessionKey: string | null = null;
@@ -336,6 +337,7 @@ export class Translator {
     this.session = this.sessionKey = this.version = null;
     this.settings = {};
     this.commands = [];
+    this.title = null;
     return this.shaped();
   }
 
@@ -523,6 +525,7 @@ export class Translator {
     ];
     const item = `session:${this.sessionKey}`;
     const body: Json = { harness_version: this.version, settings, actions: [], commands: [...this.commands] };
+    if (this.title !== null) body["title"] = this.title;
     const key = canonical(body);
     if (this.sessions.get(item) === key) return this.skip(`${nativeKind}, nothing new for the session item`);
     this.sessions.set(item, key);
@@ -832,6 +835,11 @@ export class Translator {
       return;
     }
     if (NOT_SENT_SYSTEM.has(st)) return this.skip(`system / ${word(st)}`);
+    if (st === "session_title_changed") {
+      // D-177. One before the init goes out with it.
+      this.title = typeof m["title"] === "string" ? m["title"] : null;
+      return this.announce("system / session_title_changed", m);
+    }
     if (st === "status") {
       if (m["status"] === "compacting") {
         this.ensureTurn(m);

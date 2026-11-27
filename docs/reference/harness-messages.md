@@ -429,8 +429,8 @@ the client.
 | `config_option_update` | 12 | The `session` item's settings |
 | `user_message_chunk` | 1 | Not sent: only in the replay of `session/load`. OpenCode never echoes a prompt |
 
-No `plan`, `current_mode_update`, `session_info_update`, `notice` or compaction update was sent. The translators
-would not send `session_info_update`, the session's title, either.
+No `plan`, `current_mode_update`, `session_info_update`, `notice` or compaction update was sent. So an OpenCode
+session item has no title ([a session's title](#a-sessions-title)).
 
 ### A turn
 
@@ -593,8 +593,9 @@ OpenCode above; only what differs is written here.
 - **Commands.** Eleven: `prompts`, `prompt`, `compact`, `clear`, `skills`, `doctor`, `goal`, `grind`, `status`,
   `goose-doc-guide`, `web-search`.
 - **Extra updates.** `session_info_update` before and after each turn, some only with
-  `_meta.goose.activeRunId`, one with a title after the reply, and two or three `usage_update` per turn. None
-  is sent to the chat. Every chunk carries a `messageId` and Goose's own `_meta`.
+  `_meta.goose.activeRunId`, one with a title after the reply, and two or three `usage_update` per turn. The
+  title becomes the session item's ([a session's title](#a-sessions-title)); nothing else of them is sent to
+  the chat. Every chunk carries a `messageId` and Goose's own `_meta`.
 - **Tool calls carry no `kind` and no `name`.** The title is `shell · <command>`, `edit · <path>` or
   `<extension>: <tool>`; the tool name is only in `_meta.goose.toolCall`. So every tool item is of kind `other`,
   with the raw input as its `input`. A `tool_call` arrives with no status; `in_progress` and `completed` follow.
@@ -643,7 +644,8 @@ OpenCode is written here.
   no tool item for it (rule 4). The recorder did not answer the request, and Cursor went on regardless; the
   driver answers it with an empty result.
 - **No usage.** The reply to `session/prompt` has only `stopReason`.
-- **`session_info_update`** once per session, with a title.
+- **`session_info_update`** once per session, with a title, which becomes the session item's
+  ([a session's title](#a-sessions-title)).
 
 ## ACP: Antigravity
 
@@ -685,8 +687,9 @@ is written here.
 - **Sessions and usage.** Both `session/resume` (no replay) and `session/load` (replays `user_message_chunk`
   and `agent_message_chunk`) recover sessions across restarts, and two sessions in one process stay isolated.
   The reply to `session/prompt` carries `stopReason` and `usage` (`inputTokens`, `outputTokens`,
-  `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens`, `totalTokens`). `session_info_update` sends a title
-  and `usage_update` reports context-window size; neither is sent to the chat.
+  `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens`, `totalTokens`). `session_info_update` sends a title,
+  once or twice per session, which becomes the session item's ([a session's title](#a-sessions-title)), and
+  `usage_update` reports context-window size, which is not sent to the chat.
 
 ## Pi
 
@@ -806,6 +809,27 @@ The model endpoint's 503s and 520s show as an assistant message with `stopReason
 drops the failed message from the context, and a new `agent_start`. After the last attempt, `auto_retry_end`
 with `success: false` and `agent_settled` (`retry_failed`).
 
+## A session's title
+
+The `session` item carries the harness's own title for the session, when it gives one, and is edited when it
+changes ([D-177](../decisions.md#d-177-the-session-item-carries-the-sessions-title-its-project-comes-later-to-full-activity-chats-only)).
+Checked on 2026-11-27, per harness:
+
+| Harness | Where the title comes from | Names a session by itself? | How this was checked |
+| --- | --- | --- | --- |
+| Claude Code | `system / session_title_changed`, with `title` | Yes in real use (309 times over 1,327 turns, through T3 Code); not in a scripted session | The real-use sample's structures. Two scripted SDK sessions (SDK 0.3.321, `haiku`, two turns, one with 15 seconds between them) sent none. No recording holds one, so the driver's test is written by hand from the structure. Why T3 Code's sessions get titles and a scripted one does not was not found (inferred: something in how the host starts the session) |
+| Codex | The thread's `name`, in the reply to `thread/start` or `thread/resume` and in `thread/started`; `thread/name/updated`, with `threadName`, null for none | No | Every recording has `name: null`. A thread started by hand on codex-cli 0.171.0, not ephemeral, had none 60 seconds after its turn, and no `thread/name/updated` came. A thread is named with `thread/name/set`, or before it is resumed, as by Codex's own client |
+| Goose, Cursor, Antigravity | ACP's `session_info_update`, with `title`, null to clear it | Yes | The recordings: Goose sends one after a session's first reply, Cursor once per session, Antigravity once or twice with the same title |
+| OpenCode | None | No | No recording holds a `session_info_update` |
+| Pi | `sessionName` in the reply to `get_state`; `session_info_changed`, with `name`, absent when cleared | No: `set_session_name`, `--name`, or an extension names it | Pi 1.6.0's `docs/rpc-commands.md` and `docs/json.md`. No recording holds one |
+| Hermes | None a channel plugin is given | Yes, but only Hermes's own Telegram and Discord lanes are told | Hermes `40d1e95f`: `agent/title_generator.py` writes the title to Hermes's session database, and `gateway/run_turn_progress.py` hands it only to the built-in Telegram topic and Discord thread renames. No hook or adapter call carries it to a plugin's platform, so the session item has none |
+| OpenClaw | None a channel plugin is given | Yes, in its Control UI | OpenClaw 2026.11.5's documentation. Its session names live in the Control UI and the transcript catalog, whose reader, `plugin-sdk/session-transcript-runtime`, is private to OpenClaw's own plugins after July 2026. No hook gives a channel plugin a title, so the session item has none |
+
+A title is shown to every chat, whatever it is sent of the agent's activity
+([D-177](../decisions.md#d-177-the-session-item-carries-the-sessions-title-its-project-comes-later-to-full-activity-chats-only)).
+A change is an edit of the session item and never a notice: nobody set it, but it is no setting either
+([D-046](../decisions.md#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)).
+
 ## Side by side
 
 | | Codex | Claude Code |
@@ -856,7 +880,8 @@ and no native message is left without a rule. "Not sent" means the driver uses i
 | `task` | Not seen | `system / task_*` |
 | `notice` | `sleep`, `contextCompaction`, `warning`, `model/rerouted` | `system / status` while compacting, `compact_boundary`, `api_retry`, `<local-command-stdout>` |
 | `error` | `error` notification; an error response | A `result` with `is_error` becomes a failed turn |
-| Not sent | Deltas; `userMessage` echo; thread status; token usage; rate limits; moderation metadata; MCP start-up; account; settings; `serverRequest/resolved`, unless it closes a request still waiting; `turn/diff/updated` | `stream_event`; `thinking_tokens`; `rate_limit_event`; `tool_progress`; `command_lifecycle`; `background_tasks_changed`; the compaction summary; title, version-control and code-change notices |
+| `session`, its `title` | The thread's `name`; `thread/name/updated` | `system / session_title_changed` |
+| Not sent | Deltas; `userMessage` echo; thread status; token usage; rate limits; moderation metadata; MCP start-up; account; settings; `serverRequest/resolved`, unless it closes a request still waiting; `turn/diff/updated` | `stream_event`; `thinking_tokens`; `rate_limit_event`; `tool_progress`; `command_lifecycle`; `background_tasks_changed`; the compaction summary; version-control and code-change notices |
 
 ## What this means for the design
 

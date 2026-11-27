@@ -601,6 +601,10 @@ pub struct Session {
     /// The harness's slash commands.
     #[serde(default)]
     pub commands: Vec<Command>,
+    /// The harness's own title for the session, when it gives one (D-177). The driver fills it in,
+    /// and edits the item when it changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Who in the chat may prompt and who may approve (D-176). The core fills it in, not the
     /// driver, once it knows who is in the chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]

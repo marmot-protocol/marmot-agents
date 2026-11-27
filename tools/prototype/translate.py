@@ -172,17 +172,21 @@ class Translator:
                 owner=(ev["session"], ev["turn"]),
             )
 
-    def session_item(self, sid, settings, native_kind, native, actions=(), commands=(), version=None):
+    def session_item(self, sid, settings, native_kind, native, actions=(), commands=(), version=None, title=None):
         """A session started, or something about it changed. Sent only when the body differs from the
         last one sent, so a harness that repeats its settings on every turn produces no edits.
 
         A setting is {"id", "label", "value", "options", "approve"}. "options" is None when the
         harness does not say what it accepts. "approve" marks a setting that decides what the agent
-        may do without asking, which needs the right to approve (D-032)."""
+        may do without asking, which needs the right to approve (D-032). `title` is the harness's
+        own title for the session, left out when it gives none (D-177); a change of it is an edit,
+        and no notice, since nobody set it (D-046)."""
         item = f"session:{sid}"
         body = {"settings": settings, "actions": list(actions), "commands": list(commands)}
         if version is not None:
             body = {"harness_version": version, **body}
+        if title is not None:
+            body["title"] = title
         key = json.dumps(body, sort_keys=True)
         if self.sessions.get(item) == key:
             return
@@ -301,6 +305,11 @@ class Codex(Translator):
                 if self.for_another_thread(p.get("threadId")):
                     return
                 return self.thread_settings(method, p.get("threadSettings") or {}, p)
+            if method == "thread/name/updated":  # null for no name (D-177)
+                if self.for_another_thread(p.get("threadId")) or self.session is None:
+                    return
+                self.settings["title"] = p.get("threadName")
+                return self.thread_settings(method, {}, p)
             if method == "serverRequest/resolved" and not self.for_another_thread(p.get("threadId")):
                 # Codex waits no longer: the item closes now, though the turn goes on. One already
                 # answered keeps its answer.
@@ -654,6 +663,8 @@ class Codex(Translator):
         thread/start, thread/started, and thread/settings/updated. The driver merges them."""
         sandbox = src.get("sandboxPolicy") or src.get("sandbox")
         thread = src.get("thread") if isinstance(src.get("thread"), dict) else src
+        if "name" in thread:  # a thread's name is the session's title, null for none (D-177)
+            self.settings["title"] = thread["name"]
         for key, value in {
             "version": thread.get("cliVersion"),
             "model": src.get("model"),
@@ -672,7 +683,8 @@ class Codex(Translator):
             self.setting("mode", "Mode", g("mode"), self.modes),
             self.setting("approval_policy", "Approval policy", g("approval_policy"), approve=True),
             self.setting("sandbox", "Sandbox", g("sandbox"), approve=True),
-        ], native_kind, native, actions=[{"id": "compact", "label": "Compact the conversation"}], version=g("version"))
+        ], native_kind, native, actions=[{"id": "compact", "label": "Compact the conversation"}], version=g("version"),
+            title=g("title"))
         if len(self.events) == before:
             self.skip(f"{native_kind}, nothing new for the session item")
 
@@ -759,7 +771,7 @@ class Claude(Translator):
         "WebFetch": "fetch", "Agent": "subagent", "Task": "subagent",
     }
     NOT_TOOLS = {"AskUserQuestion", "ExitPlanMode"}
-    NOT_SENT_SYSTEM = {"thinking_tokens", "background_tasks_changed", "session_title_changed", "vcs_state_changed",
+    NOT_SENT_SYSTEM = {"thinking_tokens", "background_tasks_changed", "vcs_state_changed",
                        "code_change_published", "commands_changed", "hook_started", "hook_response"}
 
     def __init__(self):
@@ -771,6 +783,7 @@ class Claude(Translator):
         self.approval_ids: dict[str, str] = {}  # the callback's request id -> open approval item
         self.settings: dict = {}
         self.commands: list = []
+        self.title = None  # the session's title, once Claude Code has given one (D-177)
         self.models = None  # model names, once the client has asked for them
         self.version = None  # Claude Code's version, from its init message
         self.session_key = None  # the session the session item is for, once Claude Code has named it
@@ -850,7 +863,7 @@ class Claude(Translator):
         self.session_item(self.session_key, [
             self.setting("model", "Model", g("model"), self.models),
             self.setting("permission_mode", "Permission mode", g("permission_mode"), approve=True),
-        ], native_kind, native, commands=self.commands, version=self.version)
+        ], native_kind, native, commands=self.commands, version=self.version, title=self.title)
         if len(self.events) == before:
             self.skip(f"{native_kind}, nothing new for the session item")
 
@@ -1051,6 +1064,9 @@ class Claude(Translator):
             return
         if st in self.NOT_SENT_SYSTEM:
             return self.skip(f"system / {st}")
+        if st == "session_title_changed":  # D-177; one before the init goes out with it
+            self.title = m.get("title") if isinstance(m.get("title"), str) else None
+            return self.announce("system / session_title_changed", m)
         if st == "status":
             status = m.get("status")
             if status == "compacting":
@@ -1152,6 +1168,7 @@ class Acp(Translator):
         self.cancelled = False  # the client asked to cancel the turn
         self.config: list = []  # the session's configuration options, as the agent last stated them
         self.commands: list = []
+        self.title = None  # the session's title, as the agent last stated it (D-177)
         self.streamed: dict[str, dict] = {}  # message or thinking id -> its chunks so far
         self.last_tool: dict[str, dict] = {}  # tool call id -> the last event sent for it
         self.n = collections.Counter()  # how many items a turn has made with no id of the agent's
@@ -1334,8 +1351,14 @@ class Acp(Translator):
         if kind == "config_option_update":
             self.config = u.get("configOptions") or []
             return self.announce(native_kind, p)
+        if kind == "session_info_update" and "title" in u:
+            # The session's title, or null to clear it (D-177). Goose sends one with no title too.
+            if p.get("sessionId") != self.session:
+                return self.skip(f"{native_kind}, for another session")
+            self.title = u["title"] if isinstance(u["title"], str) else None
+            return self.announce(native_kind, p)
         if kind in ("usage_update", "session_info_update"):
-            # The context window, whose use a turn's reply states; and the session's title.
+            # The context window, whose use a turn's reply states; and Goose's run, with no title.
             return self.skip(native_kind)
         self.unknown(native_kind)
 
@@ -1551,7 +1574,7 @@ class Acp(Translator):
             self.end_session(self.session, "another session was started")
             self.sessions.pop(f"session:{sid}", None)
             self.sessions.pop(f"session:{self.session}", None)
-            self.config, self.commands = [], []
+            self.config, self.commands, self.title = [], [], None
         self.session = sid
 
     def announce(self, native_kind, native):
@@ -1569,7 +1592,7 @@ class Acp(Translator):
                                          approve=o.get("category") == "mode"))
         before = len(self.events)
         self.session_item(self.session, settings, native_kind, native, commands=self.commands,
-                          version=self.version or "")
+                          version=self.version or "", title=self.title)
         if len(self.events) == before:
             self.skip(f"{native_kind}, nothing new for the session item")
 
@@ -2911,7 +2934,6 @@ class Pi(Translator):
         "entry_appended": "an entry was added to the session file",
         "message_update": "partial text and tool arguments",
         "tool_execution_update": "partial tool output",
-        "session_info_changed": "the session's display name changed",
         "auto_retry_end": "a retry ended; the turn says how",
         "bash_execution_update": "output of a command the client ran itself",
     }
@@ -2967,6 +2989,7 @@ class Pi(Translator):
             "compaction_start": self.compaction_start,
             "compaction_end": self.compaction_end,
             "thinking_level_changed": self.thinking_changed,
+            "session_info_changed": self.named,
             "extension_ui_request": self.extension_ui,
             "extension_error": self.extension_error,
         }.get(t)
@@ -3015,6 +3038,7 @@ class Pi(Translator):
             model = data.get("model") or {}
             self.settings["model"] = f"{model['provider']}/{model['id']}" if model else None
             self.settings["thinking"] = data.get("thinkingLevel")
+            self.settings["title"] = data.get("sessionName")  # the session's name is its title (D-177)
         elif command == "get_available_models":
             self.models = [f"{x.get('provider')}/{x.get('id')}" for x in data.get("models") or []]
         elif command == "get_available_thinking_levels":
@@ -3062,7 +3086,7 @@ class Pi(Translator):
         ], native_kind, native,
             actions=[{"id": "compact", "label": "Compact",
                       "description": "Summarise the conversation so far, to free up context"}],
-            commands=self.commands or [], version=self.version or "")
+            commands=self.commands or [], version=self.version or "", title=g("title"))
         if len(self.events) == before:
             self.skip(f"{native_kind}, nothing new for the session item")
 
@@ -3219,6 +3243,11 @@ class Pi(Translator):
     def thinking_changed(self, m):
         self.settings["thinking"] = m.get("level")
         self.announce("thinking_level_changed", m)
+
+    def named(self, m):
+        """The session was named, or its name cleared, with no `name` (D-177)."""
+        self.settings["title"] = m.get("name")
+        self.announce("session_info_changed", m)
 
     def extension_error(self, m):
         self.emit(f"extension-error:{self.seq + 1}", "error", "failed", "An extension failed", m.get("error") or "",
