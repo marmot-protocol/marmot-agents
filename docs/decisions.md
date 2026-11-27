@@ -388,6 +388,11 @@ Decided 2026-11-18. This replaces the line in [D-023](#d-023-one-kind-carries-ev
 ([Q-03](open-questions.md#q-03-where-are-the-event-kinds-specified)). See
 [`design/answers-and-controls.md`](design/answers-and-controls.md).
 
+Noted 2026-11-27: the tags were fixed by [D-076](#d-076-the-tags-of-kinds-1201-and-1202). The action is not a tag
+of its own: one `details` tag holds it as JSON, with an `action` of `choice`, `questions`, `interrupt`,
+`new_session`, `set` or `own`, as [kinds 1201 and 1202](design/agent-kinds.md#kind-1202-an-answer-or-a-control)
+has it.
+
 ## D-028 An answer or a control is a request, and the agent's reply settles it
 
 **Decision.** Sending an answer or a control changes nothing by itself. The agent resolves each one with exactly
@@ -662,6 +667,9 @@ Decided 2026-11-18. Codex's interface has this marking. No recording contains a 
 A secret question carries a native message only while it is waiting
 ([D-056](#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
 
+An app should not offer to answer one in a chat of more than two members
+([D-181](#d-181-an-app-should-not-offer-to-answer-a-secret-question-in-a-chat-of-more-than-two-members)).
+
 ## D-042 An agent may act in its own chat, and may not change a group or the account
 
 **Decision.** Hermes and OpenClaw give their agents message tools. Through the socket's chat section such an
@@ -928,6 +936,9 @@ hand too, and that was not tried. The trial page proposes checks for it. They ar
 this decision.
 
 Decided 2026-11-19.
+
+Noted 2026-11-27: MDK's history was rewritten on 2026-11-24, and `6f6d2017d`, cited above, is no longer on it: it
+was the merge of MDK pull request 3375.
 
 ## D-056 A secret question carries a native message only while it is waiting
 
@@ -2315,6 +2326,9 @@ pull request records as D-117.
 
 Decided 2026-11-23. The project owner decided.
 
+Noted 2026-11-27: MDK's history was rewritten on 2026-11-24, and `6f6b427`, cited above, is no longer on it: it was the merge of MDK pull request 3613. Its content is in `bea7b400`, the revision the
+core uses.
+
 ## D-122 A subagent's words, what alerts, and the app's running bar
 
 **Decision.**
@@ -2942,6 +2956,9 @@ is what D-121 describes, and a subagent given more work is the same subagent.
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points. Points 5 and 6,
 and what point 4 says of a later version and of words whose thread is gone, are visible to apps and provisional
 until the owner accepts them.
+
+Noted 2026-11-27: MDK's history was rewritten on 2026-11-24, and `029e057`, cited above, is no longer on it: it was the merge of MDK pull request 3640. Its content is in `bea7b400`, the revision the
+core uses.
 
 ## D-143 One issue tracks the CI jobs that flake
 
@@ -4181,6 +4198,12 @@ And `p` already names the agent, on a kind 1202 request and on an item in a suba
 Decided 2026-11-27. The builder found it while building D-175, and the project owner accepted the
 recommendation.
 
+Corrected 2026-11-27, in reading MDK for the specification draft of issue #156: the first reason is wrong. MDK at
+`bea7b400`, the revision the core uses, does pass an item's other tags on to apps: an app's row holds the latest
+version's tags, the ones MDK does not read (`native`, `left_out`, `cut`) among them
+(`crates/marmot-uniffi/src/conversions/timeline.rs`). The decision stands on its second reason, that `p` already
+names the agent.
+
 ## D-180 A prompt a driver refuses as having ended waits for the next driver, whenever the core handed it on
 
 **Decision.** When a driver refuses a prompt saying it has ended and none of the prompt reached it
@@ -4217,3 +4240,90 @@ Decided 2026-11-27 by the project owner; how answers and controls are treated wa
 the project owner's instruction to decide minor points. The project owner accepted both on 2026-11-27, and that a prompt which
 waits through repeated restarts of a failing harness tells nobody, for now: issue #44, which lets the owner see
 whether the agent is running, is the fix for that.
+
+## D-181 An app should not offer to answer a secret question in a chat of more than two members
+
+**Decision.** The specification of agents in chats
+([D-184](#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)) makes
+[D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat) a rule for apps as well: an app SHOULD NOT
+offer to answer a secret question in a chat of more than two members, and says to answer it at the agent instead.
+The agent still refuses such an answer there. D-041 stays the agent's rule, and what the agent does is unchanged.
+
+**Why.** An answer sent to a group is readable by every member, whatever the agent then does with it, so refusing
+it only at the agent is too late to keep the secret. An app is the one place that can stop it being sent. It is a
+SHOULD, not a MUST, since the agent cannot check an app, and an app that offers it anyway is still refused.
+
+Decided 2026-11-27. The project owner decided, from the specification draft for issue #156.
+
+## D-182 Nothing in a chat proves that a member is an agent, or whose it is
+
+**Decision.** This is stated as a known limit, in the specification and here. A `session` item proves nothing: any
+member can send one, so a member that has sent one is an agent only in what it says of itself
+([D-175](#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts)).
+`rights` in a session item is the agent's statement, for display
+([D-176](#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve)): an app MAY grey out what
+the viewer may not do and show whom an approval waits for, and MUST NOT grant or deny anything on its strength.
+Only the agent enforces its rights, on the owner's machine. How an owner's app could know an agent is the owner's
+own is a new open question,
+[Q-33](open-questions.md#q-33-how-does-an-owners-app-know-an-agent-is-theirs).
+
+**Why.** MLS proves which account sent an event and nothing more about it. The session item is sent by the agent
+about itself, and a profile mark, which D-175 dropped, would prove no more. Saying so keeps an app, or the
+attention contract of the Marmot specification's issue 412, from treating the mark as authority. Proof needs
+something the owner holds, such as the pairing proposed on issue #4, which is product design of its own.
+
+Decided 2026-11-27. The project owner decided, from the specification draft for issue #156.
+
+## D-183 The agent's words carry `settles`
+
+**Decision.** The provisional addition built on 2026-11-21 is accepted, as
+[kinds 1201 and 1202](design/agent-kinds.md#accepted-for-the-specification) has it: a chat message of the
+agent's words carries a `settles` tag for each answer or control whose effect it shows, as an item does. An edit of
+words cannot carry tags, so what the changed words settle is carried by the next version of their turn, the same as
+the last, sent right after the edit; so is what final words that come again unchanged name. If MDK refuses the
+edit, that version settles nothing, and those requests are settled as `failed`. How many `settles` the words carry
+stays as [D-120](#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built) has it. The specification
+makes the tag normative on kind 9.
+
+**Why.** A final answer is often what shows that an interrupt or an answer took effect, and D-120, already
+accepted, depends on the words carrying it. The addition has been built and sent since 2026-11-21.
+
+Decided 2026-11-27. The project owner accepted the provisional addition, from the specification draft for issue
+#156.
+
+## D-184 The specification of agents in chats is proposed to the Marmot repository
+
+**Decision.** What the core and MDK send and read for agents in chats is proposed to the Marmot specification
+(`marmot-protocol/marmot`) as one feature document, `features/agents-in-chats.md`, with the edits it needs to
+`foundation/application-messages.md` (the exception to kind 1009 for an agent item, and the tags on kind 9) and
+`foundation/registries.md` (kinds 1201 and 1202), as a draft pull request, from issue #156. It carries no MIP
+number: the Marmot repository no longer takes numbered MIPs. With D-181 to D-183, the choices the draft left open
+are taken as it recommends:
+
+- **Size.** The limit of [D-026](#d-026-an-agent-item-is-at-most-64-kb) is 65,536 bytes, measured as MDK
+  measures it, on the inner event without a signature; the core's own measure is a little stricter, and stays
+  within it. A receiver does not refuse an event for its size; an app may decline to show it.
+- **Subagent threads** are a separable section, not normative until the specification defines threads.
+- **What a reader does with what it does not know.** A stray `e` on a kind 1201 is ignored for placement, replies
+  and edits, and senders must not send one. A body-less item, or one with a value a reader does not know, is shown
+  generically. An unknown `state` leaves an item unreadable, so a new state needs new kind numbers, and there is no
+  version marker for the shape. Senders must not repeat a JSON member, and a reader may treat such a value as
+  invalid.
+- **Optional parts.** The provisional parts the core sends (the other `cut` kinds, the `too_large` stand-in, the
+  `not_delivered` close, the `subagent` tag) are optional, and an app must not depend on them. Senders should not
+  send a kind 1201 of type `message`.
+- **Order.** An agent's current session item in a chat is its readable one whose first event is latest. Two
+  versions with one `v` are ordered by `created_at`, then event id, the greater winning.
+- **Attention.** The draft defines no alert policy, only the facts the specification's attention contract (its
+  issue 412) needs, with MDK's behaviour as an interim SHOULD.
+- **Rules that stay the agent's.** A request that names no item is taken only within five minutes of its
+  `created_at`. An app without threads should quote a turn's `started_by` message.
+
+**Why.** The kinds are Marmot events, and a second client needs one place that says what they are
+([Q-03](open-questions.md#q-03-where-are-the-event-kinds-specified)). The Marmot repository is organised by
+surface since 2026-07-02, and its own idea page for agents names a feature document as its path into the
+specification. Each choice describes what MDK does today. Where the core reads more strictly, it is the core's
+to change: it rejects a whole item that holds a value it does not know (issue #271).
+
+Decided 2026-11-27. The project owner decided. The draft is opened in the Marmot repository after this is
+recorded; until the Marmot repository accepts it, the definition there is a proposal.

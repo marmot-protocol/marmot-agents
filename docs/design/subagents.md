@@ -6,8 +6,8 @@ to [D-126](../decisions.md#d-126-no-mls-group-for-subagents), which settle what 
 settled by [D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags).
 Built on 2026-11-24 in the core and the Codex driver
 ([D-141](../decisions.md#d-141-subagent-threads-are-built-before-the-swap),
-[as built](#as-built), [D-142](../decisions.md#d-142-how-subagent-threads-are-built)), and in MDK at
-`029e0579f`; the White Noise apps have their part still to do. Still open: two proposals from the cases, which were
+[as built](#as-built), [D-142](../decisions.md#d-142-how-subagent-threads-are-built)), and in MDK by pull
+requests 3622, 3630 and 3640, which are in `bea7b400`, the revision the core uses; the White Noise apps have their part still to do. Still open: two proposals from the cases, which were
 not among the points decided ([still open](#still-open)).
 The direction was agreed with the project owner on 2026-11-20 and sharpened on 2026-11-23, after a research round
 written up in [subagents, threads and what others do](../reference/subagents-prior-art.md).
@@ -95,7 +95,7 @@ subagent's view by filtering on its `task` item as the parent: A's view holds wh
 reply to a message names that message as its parent, and belongs to the
 view of the first `task` item up its chain of parents (inferred from NIP-22; not checked in an app). MDK already
 places a thread message this way: it takes the root from its parent's thread
-(`crates/marmot-app/src/client/thread_placement.rs` at MDK `6f6b427`), so a person's reply anywhere in the tree
+(`crates/marmot-app/src/client/thread_placement.rs`, as read on 2026-11-23 with MDK pull request 3613), so a person's reply anywhere in the tree
 keeps A as its root. An app that reads only the root shows B's events inside A's thread: busy, and nothing lost.
 White Noise for Linux already shows a thread inside a thread as a view of its own (inferred to fit; not checked
 with agent items).
@@ -112,10 +112,11 @@ still place it in its thread ([D-133](../decisions.md#d-133-an-edit-of-an-item-i
 
 ### What MDK has to do
 
-Done in MDK by pull requests 3622, 3630 and 3640 (in master at `029e0579f`, and in `bea7b40`, which the core uses now): a kind
+Done in MDK by pull requests 3622, 3630 and 3640 (in `bea7b400`, which the core uses now): a kind
 1201 with `E` joins its thread under its `e`, an edit keeps its first event's place and may repeat `E`, `K` and
 `P`, the agent's own comments in its threads neither alert nor count as unread, a `p` naming the sender is no
-mention, and a late joiner is shown an item from its edits. What follows was the list as read at MDK `6f6b427`:
+mention, and a late joiner is shown an item from its edits. What follows was the list as read on 2026-11-23,
+with MDK pull request 3613 and before those three:
 
 - **Place a kind 1201 event in a thread.** Today only a comment, a chat message and a poll can be in one.
 - **Take the parent `e` on an item's first event.** Today MDK refuses any `e` on a kind 1201 event a program
@@ -276,9 +277,9 @@ the parent's choice, shown as a new row; the person who wants it all to end uses
 ### 9. A thread that began before someone joined
 
 A member added to the group cannot read anything sent before they joined. So they miss a running subagent's
-`task` item and the start of its thread, and get later edits of an item they never had. MDK at `6f6b427` held
-such an edit, waiting for an item that would never come
-([what this costs](event-carrier.md#what-this-costs)); at `029e0579f` it shows the item from its edits.
+`task` item and the start of its thread, and get later edits of an item they never had. MDK before its pull
+request 3640 held such an edit, waiting for an item that would never come
+([what this costs](event-carrier.md#what-this-costs)); since then it shows the item from its edits.
 
 **Proposed:** an edit carries the whole item, so an app that holds an edit of an item sent before the member
 joined shows the edit as the item. This helps every item, not only subagents. The thread then shows what

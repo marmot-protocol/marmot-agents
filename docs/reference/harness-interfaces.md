@@ -10,6 +10,8 @@ research.
   stated in it. The crate and package versions under "Libraries" were checked directly against crates.io, npm
   and GitHub.
 - **Versions move fast.** Most of these projects release weekly. Re-check before relying on a detail.
+- **MDK `6f6d2017d`**, cited in the Codex library trial, was the merge of MDK pull request 3375. It is no longer on
+  MDK's history, which was rewritten on 2026-11-24 (noted on 2026-11-27).
 - **OpenCode's ACP was run on 2026-11-21.** The OpenCode entry and the `agent-client-protocol` row under
   "Libraries" were checked that day: OpenCode 2.3.2 was driven over `opencode acp` by a recorder, and the
   crate was built into this workspace. What OpenCode sent is in

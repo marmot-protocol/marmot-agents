@@ -612,8 +612,8 @@ pub struct Session {
     /// The owner's name for this install, such as "laptop", when the owner set one (D-175).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// The owner's key, in hex, when the owner chose to show it (D-175). Provisional: D-175 has it
-    /// as a `p` tag.
+    /// The owner's key, in hex, when the owner chose to show it (D-175), as a field of the item
+    /// and not a `p` tag (D-179).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
 }

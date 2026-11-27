@@ -13,9 +13,14 @@ first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under t
 that writes and reads them is `crates/marmot-agent/src/carrier.rs`. What was
 [accepted with the move to MDK](#accepted-with-the-move-to-mdk) is decided
 ([D-120](../decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)). The section
-[provisional additions](#provisional-additions) is a proposal, built and waiting for the owner. The tags of
+[provisional additions](#provisional-additions) is a proposal, built and waiting for the owner, except the one
+[accepted for the specification](#accepted-for-the-specification) on 2026-11-27
+([D-183](../decisions.md#d-183-the-agents-words-carry-settles)). The tags of
 [an item in a subagent's thread](#an-item-in-a-subagents-thread) were decided on 2026-11-23
-([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)) and are not built.
+([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them),
+[D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)) and built on
+2026-11-24. The page is proposed to the Marmot specification as part of a feature document
+([D-184](../decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)).
 
 ## What M1 showed
 
@@ -98,7 +103,7 @@ Built on 2026-11-22 with the move to MDK's kinds, and accepted by the owner on 2
 
 ## An item in a subagent's thread
 
-Decided on 2026-11-23 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)); built on 2026-11-24 in the core and in MDK at `029e0579f` ([D-142](../decisions.md#d-142-how-subagent-threads-are-built)). Each subagent
+Decided on 2026-11-23 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)); built on 2026-11-24 in the core and in MDK by pull requests 3622, 3630 and 3640, which are in `bea7b400`, the revision the core uses ([D-142](../decisions.md#d-142-how-subagent-threads-are-built)). Each subagent
 is a thread in the agent's group, rooted at its `task` item, and every item in it carries NIP-22's tags as NIP-22
 defines them, the same way a comment does:
 
@@ -115,16 +120,23 @@ An edit already uses `e` for its target, so it cannot also carry the parent `e`;
 and `P` and carries no lowercase ones ([D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)). MDK takes the parent `e` on an item's first event, and reads a `p` naming the event's own author as no
 mention ([what MDK has to do](subagents.md#what-mdk-has-to-do)).
 
-## Provisional additions
+## Accepted for the specification
 
-Built on 2026-11-21 while fixing the known gaps of [testing and verification](verification.md). These are
-**provisional**: the owner has not accepted them, and they are not in `docs/decisions.md`.
+Built on 2026-11-21 as a provisional addition, and accepted by the owner on 2026-11-27, when the specification was
+drafted ([D-183](../decisions.md#d-183-the-agents-words-carry-settles)).
 
 - **The agent's words carry `settles`.** A chat message of the agent's words carries a `settles` tag for each
   answer or control whose effect it shows, as an item does. An edit of words cannot carry tags, so what the
   changed words settle is carried by the next version of their turn, the same as the last, sent right after the
   edit. So is what final words that come again unchanged name. If MDK refuses the edit, that version settles
-  nothing, and those requests are settled as `failed`.
+  nothing, and those requests are settled as `failed`. How many the words carry is
+  [above](#accepted-with-the-move-to-mdk).
+
+## Provisional additions
+
+Built on 2026-11-21 while fixing the known gaps of [testing and verification](verification.md). These are
+**provisional**: the owner has not accepted them, and they are not in `docs/decisions.md`.
+
 - **At most 200 `settles` on one event.** An item's version, or the agent's words, that would settle more goes
   out as several versions of the same item, the same and numbered on, each settling at most 200; words leave the
   rest to their turn's next versions. So every event that settles fits in 64 KB.
@@ -162,8 +174,9 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 
 A later version is an edit (kind 1009), as decided
 ([D-025](../decisions.md#d-025-an-agent-item-is-updated-with-an-edit)). It names the item's first event with its
-one `e` tag, and carries the whole item again: content and every tag above, with a higher `v`. What it carries
-of a subagent's thread tags is open ([above](#an-item-in-a-subagents-thread)). A client keeps the
+one `e` tag, and carries the whole item again: content and every tag above, with a higher `v`. In a subagent's
+thread it repeats the root tags `E`, `K` and `P` and carries no lowercase ones
+([above](#an-item-in-a-subagents-thread), [D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)). A client keeps the
 version with the highest `v`, and holds an edit whose first event it has not received yet. Only the sender of the
 first event may edit it.
 
@@ -199,7 +212,9 @@ chat messages and comments then. The fields were the same.
 A kind 9 chat message, as any person's, with one more tag: `["turn", <turn id>]`
 ([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)). A remark made while the agent
 works, which the harness marks as one, also carries `["phase", "commentary"]`, and does not alert
-([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)). When the words change after they
+([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)). Words that show the effect of an
+answer or a control carry a `settles` tag for each
+([D-183](../decisions.md#d-183-the-agents-words-carry-settles)). When the words change after they
 were sent, they are edited like any chat message. A subagent's words are a kind 1111 thread message instead,
 with the same tags, under the subagent's `task` item, which MDK tags with NIP-22's root and parent
 ([D-122](../decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar),
@@ -237,4 +252,8 @@ MDK issue 3612; none of it holds up the core.
    ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)).
 4. What was [accepted with the move to MDK](#accepted-with-the-move-to-mdk)
    ([D-120](../decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)).
-5. The tags of an item in a subagent's thread, not built ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)).
+5. The tags of an item in a subagent's thread, and what an edit repeats of them, built on 2026-11-24
+   ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them),
+   [D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags),
+   [D-142](../decisions.md#d-142-how-subagent-threads-are-built)).
+6. The agent's words carry `settles` ([D-183](../decisions.md#d-183-the-agents-words-carry-settles)).

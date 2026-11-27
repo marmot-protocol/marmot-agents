@@ -113,7 +113,13 @@ The kinds are Marmot events, so their definition probably belongs in the
 [Marmot specification](https://github.com/marmot-protocol/marmot), with MDK exposing them to the apps. The
 ownership, and how much is specification versus app convention, is not settled. The
 [plan](plan.md) writes the specification here, from what the first end-to-end test shows, for MDK to build:
-[kinds 1201 and 1202](design/agent-kinds.md) (D-076). Who owns the definition is still open.
+[kinds 1201 and 1202](design/agent-kinds.md) (D-076).
+
+Narrowed on 2026-11-27: the definition is proposed to the Marmot specification as one feature document,
+`features/agents-in-chats.md`, with edits to two of its foundation documents
+([D-184](decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)). Still
+open: whether the Marmot repository takes it, and in what form; and where the subagent threads go, since the
+specification does not yet define threads.
 
 ## The socket protocol
 
@@ -208,11 +214,27 @@ Still to work out:
 - **How an agent knows another member is an agent.** Decided: a member that has sent a `session` item in the
   chat is one, and its messages are not prompts unless the owner lists it; nothing goes in the public profile
   ([D-175](decisions.md#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts)).
+  That mark proves nothing ([D-182](decisions.md#d-182-nothing-in-a-chat-proves-that-a-member-is-an-agent-or-whose-it-is));
+  how an owner's app could know its own agents is [Q-33](#q-33-how-does-an-owners-app-know-an-agent-is-theirs).
   A limit on back-and-forth replies, for agents on today's connectors, which send no session item, is still open.
 - **Every agent in a group reads everything.** A member receives every message, mentioned or not. Five agents
   in a group means five harness installs holding that chat.
 - **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
 - **Setup.** Each identity has to be created, named and invited. It should take one step, not five.
+
+### Q-33 How does an owner's app know an agent is theirs?
+
+Nothing in a chat proves that a member is an agent, or whose it is: a session item is the agent's statement about
+itself, and its `rights` are for display only
+([D-182](decisions.md#d-182-nothing-in-a-chat-proves-that-a-member-is-an-agent-or-whose-it-is)). The owner's own
+app could know, though, and that would let it mark the owner's agents, warn of a lookalike, and accept an invite
+from one of them.
+
+A proposal from [issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4), not decided: the owner's app
+pairs with each agent once, at setup, and keeps the agent's key in a private list synced only to the owner's own
+devices. Nothing is published. The check is by key, never by name or picture. Open within it: how the pairing is
+done, how the list is synced and kept private, what other members can learn of it (nothing, as proposed), and
+whether the agent's side keeps a matching record of its owner's devices.
 
 ### Q-10 How are permissions changed from the chat?
 

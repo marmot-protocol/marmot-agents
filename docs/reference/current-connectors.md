@@ -4,7 +4,8 @@ This page is detailed on purpose. It records how the existing connectors in
 [MDK](https://github.com/marmot-protocol/mdk) behave, so that the new design can be checked against them and so
 that nobody has to repeat the inventory.
 
-- **Read at:** MDK commit `a2d3486ac`, on 2026-11-17.
+- **Read at:** MDK commit `a2d3486ac`, on 2026-11-17. That revision, the merge of MDK pull request 3484, is no
+  longer on MDK's history, which was rewritten on 2026-11-24 (noted on 2026-11-27).
 - **How:** two code inventories done by research agents, with file and line references. The claims marked
   "checked" were then confirmed directly in the code. The rest were not re-checked.
 - **Paths** are relative to the MDK repository root. Line numbers will drift.

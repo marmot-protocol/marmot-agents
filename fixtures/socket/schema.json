@@ -2250,7 +2250,7 @@
             "string",
             "null"
           ],
-          "description": "The owner's key, in hex, when the owner chose to show it (D-175). Provisional: D-175 has it\nas a `p` tag."
+          "description": "The owner's key, in hex, when the owner chose to show it (D-175), as a field of the item\nand not a `p` tag (D-179)."
         }
       },
       "required": [

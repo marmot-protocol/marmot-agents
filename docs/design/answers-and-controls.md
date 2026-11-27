@@ -4,7 +4,10 @@ Status: decided on 2026-11-18, as [D-027](../decisions.md#d-027-answers-and-cont
 to [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights), and [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt)
 to [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat). Later decisions
 that came from the recordings are listed [at the end](#what-was-decided). None of it is in the Marmot
-specification yet, and the exact tags are not fixed.
+specification yet; it is proposed there as part of one feature document
+([D-184](../decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)). The
+exact tags were fixed on 2026-11-21 ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)) and are in
+[kinds 1201 and 1202](agent-kinds.md#kind-1202-an-answer-or-a-control).
 
 This is the second half of [how an agent event is carried](event-carrier.md): that page covers what an agent
 sends to the chat, and this one covers what a person sends back.
@@ -57,7 +60,7 @@ Three things follow:
 
 ### 1. One new kind carries both, kind 1202
 
-An answer or a control is an event of kind 1202, sent by a person's app to the group. A tag says which action
+An answer or a control is an event of kind 1202, sent by a person's app to the group. Its `details` tag says which action
 it is ([D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)).
 
 Kind 1202 is reserved for agent events and has no definition in the specification. MDK today uses it for rows
@@ -70,8 +73,7 @@ an agent sends about its own operations. That use ends with the old connectors.
 | The plain rendering | `content` | `Allow once` |
 | The agent it is for | a `p` tag, as mentions use | the agent's account |
 | What it acts on | an `e` tag, as replies use | the approval item, or the turn to interrupt |
-| The action | a tag | `answer`, `interrupt`, `set` |
-| The action's details | a tag holding JSON | the choice's id; the setting and its new value |
+| The action and its details | one `details` tag holding JSON, with an `action` of `choice`, `questions`, `interrupt`, `new_session`, `set` or `own` ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)) | `{"action": "choice", "choice": "allow_once"}`; the setting and its new value |
 
 An agent ignores an event that does not name it.
 
@@ -416,7 +418,9 @@ So a secret question can be answered from the chat only when the chat has two me
 person ([D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)). In any other
 chat the question is shown, cannot be answered there, and says to answer it at the terminal. The agent's reply
 says the question was answered and never repeats the answer. The answer does stay in that chat's history on
-that person's devices.
+that person's devices. Since the agent can refuse an answer only once it has been sent to every member, an app
+should not offer to answer a secret question in a chat of more than two members
+([D-181](../decisions.md#d-181-an-app-should-not-offer-to-answer-a-secret-question-in-a-chat-of-more-than-two-members)).
 
 ## What older apps show
 
@@ -473,6 +477,8 @@ In the core:
 | Controls need the right to prompt | [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt) |
 | A message sent during a turn goes straight to the harness | [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness) |
 | A secret answer is accepted only in a two-person chat | [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat) |
+| An app should not offer to answer a secret question in a chat of more than two members | [D-181](../decisions.md#d-181-an-app-should-not-offer-to-answer-a-secret-question-in-a-chat-of-more-than-two-members) |
+| The rights a session item names are the agent's statement, for display; nothing proves a member is an agent | [D-182](../decisions.md#d-182-nothing-in-a-chat-proves-that-a-member-is-an-agent-or-whose-it-is) |
 | A listed command says where in a message it counts | [D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts) |
 | The core matches a typed command as any harness reads it, failing towards asking for the right to approve | [D-150](../decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve) |
 | A request to confirm a command is a question | [D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question) |
