@@ -424,12 +424,19 @@ async function main() {
 
     // Reading starts before the first prompt, so that anything the harness says unasked is recorded
     // at the moment it arrives.
+    // An error of the scenario's own step, kept apart from one the harness ends the query with.
+    let failed: { error: unknown } | undefined;
     const reading = (async () => {
       try {
         for await (const m of q) {
           record("in", "message", m as Msg);
           if ((m as Msg).session_id) sessionId = (m as Msg).session_id;
-          if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
+          try {
+            if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
+          } catch (error) {
+            failed = { error };
+            break;
+          }
           if ((m as Msg).type === "result" && !pushNext()) inbox.close();
         }
       } catch (e: any) {
@@ -441,14 +448,15 @@ async function main() {
     pushNext();
     await reading;
     clearTimeout(timer);
+    if (failed) throw failed.error;
   };
 
   // An error the harness ends a query with is part of what some scenarios record; the recorder giving up
-  // on one, or an error of its own, is not.
+  // on one, or an error of the scenario's own step or of the recorder, is not.
   try {
     await runQuery(scenario.prompts, {});
-    if (scenario.resumeWith) await runQuery(scenario.resumeWith, { resume: sessionId });
-    if (scenario.thenNew) await runQuery(scenario.thenNew, {});
+    if (scenario.resumeWith && !timedOut) await runQuery(scenario.resumeWith, { resume: sessionId });
+    if (scenario.thenNew && !timedOut) await runQuery(scenario.thenNew, {});
     await new Promise((r) => file.end(r));
     if (timedOut) {
       console.error(`${name}: FAILED: timed out; nothing was written`);

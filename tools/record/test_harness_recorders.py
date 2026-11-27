@@ -72,7 +72,8 @@ DOCKER = textwrap.dedent("""\
     """)
 
 # The stand-in Claude Agent SDK. Mode ok answers each prompt with a result; error ends the query with an
-# error, as several recorded scenarios do on purpose; failed throws when the query starts; hang never
+# error, as several recorded scenarios do on purpose; failed throws when the query starts; refused rejects
+# a control call, such as setModel, that a scenario makes; hang never
 # ends the turn; timeout never ends it either, with the recorder's timers cut short so that its own
 # time limit is reached at once.
 SDK = textwrap.dedent("""\
@@ -99,6 +100,9 @@ SDK = textwrap.dedent("""\
         }
       })();
       q.interrupt = async () => stop();
+      q.setModel = async () => {
+        if (mode === "refused") throw new Error("fabricated refusal");
+      };
       return q;
     }
     """)
@@ -126,10 +130,10 @@ class Recorder:
         self.out = self.dest / "simple.jsonl"
         self.notes = self.tmp / "notes"
 
-    def command(self, mode: str) -> list[str]:
+    def command(self, mode: str, scenario: str) -> list[str]:
         raise NotImplementedError
 
-    def start(self, mode: str) -> subprocess.Popen:
+    def start(self, mode: str, scenario: str = "simple") -> subprocess.Popen:
         env = {
             **os.environ,
             "PATH": f"{self.bin}:{os.environ['PATH']}",
@@ -138,11 +142,11 @@ class Recorder:
             "FAKE_HARNESS": str(self.harness),
             **self.env,
         }
-        return subprocess.Popen(self.command(mode), env=env, cwd=self.tmp, text=True, stdout=subprocess.PIPE,
+        return subprocess.Popen(self.command(mode, scenario), env=env, cwd=self.tmp, text=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, preexec_fn=lambda: os.umask(0o022))
 
-    def record(self, mode: str) -> tuple[int, str]:
-        proc = self.start(mode)
+    def record(self, mode: str, scenario: str = "simple") -> tuple[int, str]:
+        proc = self.start(mode, scenario)
         stdout, stderr = proc.communicate(timeout=60)
         return proc.returncode, stdout + stderr
 
@@ -182,14 +186,16 @@ class Recorder:
         self.out.write_text("existing\n")
         proc = self.start("hang")
         self.addCleanup(proc.kill)
+        work = []
         deadline = time.monotonic() + 30
-        while not self.notes.exists():
+        # The recorder may write what it sent a moment after the stand-in has seen it.
+        while not (self.notes.exists() and (work := [p for p in self.dest.iterdir() if p != self.out])
+                   and any("\n" in p.read_text() for p in work[0].iterdir())):
             if proc.poll() is not None:
                 self.fail(f"the recorder exited early: {proc.communicate()}")
             self.assertLess(time.monotonic(), deadline, "the stand-in never saw the turn start")
             time.sleep(0.05)
         self.assertEqual(self.out.read_text(), "existing\n")
-        work = [p for p in self.dest.iterdir() if p != self.out]
         self.assertEqual(len(work), 1, work)
         self.assertEqual(self.mode(work[0]), 0o700)
         raw = list(work[0].iterdir())
@@ -208,21 +214,21 @@ class Codex(Recorder, unittest.TestCase):
         codex.write_text(f'#!/bin/sh\nexec python3 "{self.harness}" codex "$FAKE_MODE" "$FAKE_NOTES"\n')
         codex.chmod(0o755)
 
-    def command(self, mode):
-        return [sys.executable, str(HERE / "record_codex.py"), "simple", str(self.project), str(self.out)]
+    def command(self, mode, scenario):
+        return [sys.executable, str(HERE / "record_codex.py"), scenario, str(self.project), str(self.out)]
 
 
 class Acp(Recorder, unittest.TestCase):
-    def command(self, mode):
+    def command(self, mode, scenario):
         # The agent gets none of the recorder's environment but PATH, so the mode goes in its command.
         agent = shlex.join(["python3", str(self.harness), "acp", mode, str(self.notes)])
-        return [sys.executable, str(HERE / "record_acp.py"), "simple", str(self.project), str(self.out),
+        return [sys.executable, str(HERE / "record_acp.py"), scenario, str(self.project), str(self.out),
                 "--agent", agent, "--home", str(self.tmp / "home")]
 
 
 class Pi(Recorder, unittest.TestCase):
-    # Pi's simple scenario has no request whose refusal it notices, so only an interrupted run fails.
-    failing_modes = ()
+    # Pi's simple scenario has no request whose refusal it notices; the interrupted run takes the same path.
+    test_a_failed_run_fails_and_leaves_the_destination = None
 
     def setUp(self):
         super().setUp()
@@ -232,8 +238,8 @@ class Pi(Recorder, unittest.TestCase):
         self.env = {"MODEL_BASE_URL": "http://model.invalid/v1", "MODEL_NAME": "fabricated-model",
                     "MODEL_KEY_FILE": str(self.tmp / "key")}
 
-    def command(self, mode):
-        return [sys.executable, str(HERE / "record_pi.py"), "simple", str(self.project), str(self.out)]
+    def command(self, mode, scenario):
+        return [sys.executable, str(HERE / "record_pi.py"), scenario, str(self.project), str(self.out)]
 
 
 class Claude(Recorder, unittest.TestCase):
@@ -251,8 +257,8 @@ class Claude(Recorder, unittest.TestCase):
                                           '"exports": "./index.js"}\n')
         (sdk / "index.js").write_text(SDK)
 
-    def command(self, mode):
-        return ["node", str(self.tmp / "claude" / "record_claude.ts"), "simple", str(self.project), str(self.out)]
+    def command(self, mode, scenario):
+        return ["node", str(self.tmp / "claude" / "record_claude.ts"), scenario, str(self.project), str(self.out)]
 
     def test_a_run_the_harness_ends_with_an_error_is_still_published(self):
         # Contract: an error the harness ends a query with is part of what a scenario records (the committed
@@ -263,6 +269,15 @@ class Claude(Recorder, unittest.TestCase):
         self.assertIn("ended with an error", output)
         self.assertIn("fabricated error result", self.out.read_text())
         self.assertEqual(self.mode(self.out), 0o600)
+
+    def test_a_scenario_whose_own_step_fails_is_not_published(self):
+        # Contract: an error in the scenario's own step, such as a control call it makes being refused, means
+        # the scenario did not get through. Regression: the catch that keeps the harness's errors also kept
+        # this one, and the run was published with its second prompt never sent.
+        self.out.write_text("existing\n")
+        code, output = self.record("refused", scenario="model_switch")
+        self.assertNotEqual(code, 0, output)
+        self.assert_left_as_it_was()
 
 
 if __name__ == "__main__":
