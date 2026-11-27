@@ -103,8 +103,10 @@ home, makes no new one, and runs the agent as a service
   stopped puts back the ones it found, with Pi's or Goose's container image, the plugin in your Hermes or
   OpenClaw, and the agent's account store as it was before the new `marmot-agent` opened it, and running it
   again after a kill finishes it. An agent whose store was put back is left stopped, and the script prints the
-  command that starts it again. One install runs on your account at a time; a second waits for the first to
-  end
+  command that starts it again. An update keeps no copy of the store for a new agent, with the same
+  `marmot-agent` as before, or with `--no-start` or `--no-service`, which do not start the agent: after one of
+  those two, the store moves forward uncopied when the agent next starts. One install runs on your account at a
+  time; a second waits for the first to end
   ([D-134](docs/decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill),
   [D-159](docs/decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
   An update that started the agent and finished cannot be undone by installing an older release: the new
