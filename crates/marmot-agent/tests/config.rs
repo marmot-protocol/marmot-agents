@@ -174,6 +174,8 @@ fn defaults_for_white_noise_and_pi_program() {
     assert_eq!(pi.program, "pi");
     assert!(pi.args.is_empty());
     assert_eq!(pi.cwd, std::path::Path::new("/w"));
+    // The driver keeps the sessions that held a message in the account home (D-172).
+    assert_eq!(pi.held, std::path::Path::new("/unused/pi-held-sessions"));
 
     let custom = format!(
         "home = \"/unused\"\nrelays = []\nowner = \"{HEX}\"\nwhite_noise = false\n\

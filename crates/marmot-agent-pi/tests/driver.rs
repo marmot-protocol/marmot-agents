@@ -28,6 +28,7 @@ async fn start_in(work: &Path, extra: &[&str]) -> Pi {
         program: "python3".into(),
         args,
         cwd: work.to_path_buf(),
+        held: work.join(".held"),
     };
     Pi::start(setup).await.expect("the fake starts")
 }
@@ -320,6 +321,32 @@ async fn a_session_that_held_messages_and_is_gone_is_not_made_again() {
     std::fs::remove_file(work.path().join(".fake-sessions").join(session.as_str())).unwrap();
     let refused = pi.prompt(prompt("c-1", "m-2", "again")).await.unwrap_err();
     assert_eq!(refused.reason, Reason::Failed);
+}
+
+/// #63: the driver remembers, across a restart of the core, the sessions it saw hold a message,
+/// so one whose file was deleted while the core was down is not made again empty, and the chat
+/// is told why the prompt was refused.
+#[tokio::test]
+async fn a_session_that_held_messages_and_is_gone_is_not_made_again_after_a_restart() {
+    let work = tempfile::tempdir().unwrap();
+    let mut pi = start_in(work.path(), &[]).await;
+    pi.prompt(prompt("c-1", "m-1", "hello")).await.unwrap();
+    let done = until(&mut pi, |e| is_turn(e, State::Done)).await;
+    let session = session_of(&done);
+    drop(pi); // the core stops
+    std::fs::remove_file(work.path().join(".fake-sessions").join(session.as_str())).unwrap();
+
+    let mut pi = start_in(work.path(), &[]).await;
+    let mut resume = prompt("c-1", "m-2", "again");
+    resume.session = Some(session);
+    let refused = pi.prompt(resume).await.unwrap_err();
+    assert_eq!(refused.reason, Reason::Failed);
+    assert!(
+        refused.detail.is_some(),
+        "the chat is told the history is gone"
+    );
+    let prompts = std::fs::read_to_string(work.path().join(".fake-prompts")).unwrap();
+    assert!(!prompts.contains("again"), "no Pi heard the prompt");
 }
 
 #[tokio::test]

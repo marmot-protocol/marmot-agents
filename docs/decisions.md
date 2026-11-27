@@ -1616,7 +1616,9 @@ Decided 2026-11-21. The project owner accepted the recommendation.
   own. A control Pi fails, or that a stopped Pi cut off, is settled by an error item the driver makes, and a
   prompt Pi refuses shows as an error item. Pi runs in a container by default, each chat's state in a folder of
   its own named from a hash of the chat id (`MARMOT_AGENT_CHAT`). After a restart a session that never held a
-  message, and one whose file was deleted, are both made again empty (issue #63). A question asked while Pi
+  message, and one whose file was deleted, are both made again empty (issue #63). (Replaced by
+  [D-174](#d-174-the-pi-driver-remembers-across-a-restart-which-sessions-held-a-message): one that held a
+  message is not made again, after a restart too.) A question asked while Pi
   starts fails the start. A second Compact while one runs is refused as busy. The default model is
   `deepseek/deepseek-v4.1-flash:free`. (Replaced by
   [D-100](#d-100-the-installers-defaults): there is no default model.)
@@ -4014,3 +4016,24 @@ the home.
 
 Decided 2026-11-27 by the builder, under the project owner's instruction to decide minor points. The `init` guard
 it replaces was the builder's too.
+
+## D-174 The Pi driver remembers, across a restart, which sessions held a message
+
+**Decision.** The Pi driver keeps the sessions it has seen hold a message in a file of its own, one id a line,
+`pi-held-sessions` in the agent's account home, and reads it when it starts. After a restart, a session whose file
+has gone and which that file names is not made again empty: the prompt is refused, and the chat's notice says
+"Pi no longer has this session's history. Start a new session to go on." A session the file does not name, such
+as a new one the core restarted after before anyone wrote, is made again with its id as before. This replaces
+what [D-092](#d-092-the-choices-made-while-building-m3-are-accepted) says of a deleted session after a restart
+(issue #63).
+
+**Why.** Pi writes a session's file only once it holds a message, so a missing file alone cannot tell a session
+that never held one from one whose history was deleted; the core records nothing that does either. Making the
+deleted one again empty lost its history without a word. The record stays in the driver, so nothing above it
+depends on Pi ([D-004](#d-004-four-layers-with-drivers-behind-one-trait)); it holds only Pi's session ids, which
+the core already keeps. A refusal, as the driver already gave before a restart, rather than going on empty,
+because a file that has gone can also be a moved or unmounted session folder, which a new empty session would
+hide.
+
+Decided 2026-11-27 by the builder. The notice's words and the refusal are visible to people, and provisional
+until the owner accepts them.

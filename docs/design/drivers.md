@@ -587,7 +587,9 @@ args = []                            # for pi.sh: ["<model key file>", "<Pi's st
   and when the chat's Pi has stopped. Pi writes a session's file only once it holds a message, so a session
   that never did, such as a new one the core was restarted after, has none: then the driver starts Pi with
   `--session-id <id>`, which makes it again, empty, with the same id. A session the driver has seen hold a
-  message is not made again if its file has gone; the prompt is refused. Before the first prompt the driver
+  message is not made again if its file has gone, even after a restart: the driver keeps such sessions in
+  `pi-held-sessions` in the account home. The prompt is refused, and the chat is told the history is gone
+  ([D-174](../decisions.md#d-174-the-pi-driver-remembers-across-a-restart-which-sessions-held-a-message)). Before the first prompt the driver
   asks for the state, the models, the thinking levels and the commands, which the session item shows, and
   once, at start, for `pi --version`. Pi 1.6.0 reads nothing until its extensions' start-up handlers have
   finished, so a question one asks then could never be answered: the driver treats it as a failed start, as
