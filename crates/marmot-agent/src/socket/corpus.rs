@@ -473,6 +473,7 @@ async fn from_the_core() -> Vec<Example> {
         reason: Reason::NotAllowed,
         detail: Some("The file is outside the folders the agent may send files from.".into()),
         unanswered: false,
+        ended: false,
     };
     wire.driver
         .file_sent(asked[1].id.clone(), Err(refusal))
@@ -744,6 +745,7 @@ async fn from_a_connector() -> Vec<Example> {
                 reason: Reason::Busy,
                 detail: Some("A turn is running.".into()),
                 unanswered: false,
+                ended: false,
             }),
         ),
         (

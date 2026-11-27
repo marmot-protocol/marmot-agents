@@ -350,7 +350,7 @@ impl SocketDriver {
     /// Sends a request and waits for its response, holding back the events read meanwhile
     /// (D-058). A connection that drops, or a connector that has not taken the request in time,
     /// refuses it as failed and is given up: a prompt is then perhaps not delivered, and never
-    /// sent again (D-037, D-129). The time is for writing the request and answering it both, so a
+    /// sent again (D-037, D-129). One gone before any of it is written refuses it as ended. The time is for writing the request and answering it both, so a
     /// connector that stops reading cannot hold the core either. A request whose effect an event
     /// read meanwhile showed was taken all the same: the event settles an answer or a control, or
     /// names a prompt as its turn's (D-147).
@@ -364,12 +364,12 @@ impl SocketDriver {
         };
         let mut shown = false;
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         let deadline = tokio::time::Instant::now() + self.answer_within;
         self.answer_duplicates(deadline).await;
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         self.next_id += 1;
         let id = self.next_id;
@@ -388,7 +388,7 @@ impl SocketDriver {
             Ok(()) => {}
             Err(Unwritten::Nothing) => {
                 self.gone = true;
-                return Err(Refusal::new(Reason::Failed));
+                return Err(Refusal::ended());
             }
             Err(Unwritten::Part) => {
                 self.gone = true;
@@ -472,6 +472,7 @@ impl SocketDriver {
                     reason: Reason::Invalid,
                     detail: Some("Another file with this request's id is still being sent.".into()),
                     unanswered: false,
+                    ended: false,
                 },
             );
             if write_line(&mut self.writer, &message, deadline)
@@ -736,6 +737,7 @@ fn refusal(error: &Value) -> Refusal {
         reason,
         detail: data["detail"].as_str().map(String::from),
         unanswered: false,
+        ended: false,
     }
 }
 
@@ -1133,6 +1135,7 @@ mod tests {
             reason: Reason::NotAllowed,
             detail: Some("The file is outside the folders.".into()),
             unanswered: false,
+            ended: false,
         };
         driver.file_sent(asked[1].id.clone(), Err(refusal)).await;
         let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();

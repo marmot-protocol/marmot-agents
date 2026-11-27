@@ -193,6 +193,7 @@ impl Files {
                     reason: Reason::Failed,
                     detail: Some(detail.into()),
                     unanswered: false,
+                    ended: false,
                 };
                 (error.id(), Err(failed))
             }
@@ -471,6 +472,12 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// Whether the chats' members are to be read again, as MDK could not list them last time
     /// ([`Core::show_rights`]).
     members_again: bool,
+    /// Whether the message being handed on was read while the driver had output ready, so the
+    /// look could not see whether it had ended ([`Core::catch_up_group`]).
+    unseen: bool,
+    /// Whether the driver refused a prompt handed on so as one that has ended: nothing more is
+    /// read for it, and what it still has is taken until it ends (D-139).
+    gone: bool,
     /// Faults put back for the simulator, to show its checks find them: none in use.
     #[cfg(feature = "sim-bugs")]
     bugs: Bugs,
@@ -561,6 +568,8 @@ impl<D: Driver, M: Side> Core<D, M> {
             early: None,
             ended: false,
             members_again: false,
+            unseen: false,
+            gone: false,
             #[cfg(feature = "sim-bugs")]
             bugs: Bugs::default(),
         })
@@ -791,6 +800,7 @@ impl<D: Driver, M: Side> Core<D, M> {
                         .into(),
                 ),
                 unanswered: false,
+                ended: false,
             });
             return self.file_done(Uploaded { id, chat, result }).await;
         }
@@ -799,6 +809,7 @@ impl<D: Driver, M: Side> Core<D, M> {
                 reason: Reason::Invalid,
                 detail: Some("The agent named a chat it is not in.".into()),
                 unanswered: false,
+                ended: false,
             });
             return self.file_done(Uploaded { id, chat, result }).await;
         };
@@ -864,6 +875,7 @@ impl<D: Driver, M: Side> Core<D, M> {
                 reason: Reason::Failed,
                 detail: Some("The agent stopped before it was sent.".into()),
                 unanswered: false,
+                ended: false,
             });
             let (id, chat) = (file.id, file.chat);
             ended.push((Uploaded { id, chat, result }, true));
@@ -1004,23 +1016,26 @@ impl<D: Driver, M: Side> Core<D, M> {
         self.unread.get(group).is_some_and(|a| a.at.is_some())
     }
 
-    /// Reads again what is due: the catch-up MDK could not list the groups for, each group with
-    /// more to read, then each group MDK could not read, from its mark, in order.
+    /// Reads again what is due: the catch-up MDK could not list the groups for, or else each
+    /// group with more to read, then each group MDK could not read, from its mark, in order. Each
+    /// group is read once in a turn.
     async fn read_again(&mut self) -> Result<(), Unsaved> {
         let now = Instant::now();
         let due = |again: &Again| again.at.is_some_and(|at| at <= now);
-        if let Some(listing) = self.listing.as_mut().filter(|a| due(a)) {
-            listing.at = None;
-            self.catch_up().await?;
-        }
         let groups: Vec<GroupKey> = (self.unread.iter())
             .filter(|(_, again)| due(again))
             .map(|(group, _)| group.clone())
             .collect();
-        // A group that waits is read at its time, as one of `groups` if that is now.
-        for group in std::mem::take(&mut self.behind) {
-            if !self.waits(&group) {
-                self.catch_up_group(group).await?;
+        if let Some(listing) = self.listing.as_mut().filter(|a| due(a)) {
+            listing.at = None;
+            // It reads each group with more to read too, which reads on in the next turn (#106).
+            self.catch_up().await?;
+        } else {
+            // A group that waits is read at its time, as one of `groups` if that is now.
+            for group in std::mem::take(&mut self.behind) {
+                if !self.waits(&group) {
+                    self.catch_up_group(group).await?;
+                }
             }
         }
         for group in groups {
@@ -1041,9 +1056,15 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// starts where [`Core::start_of`] says. When the driver has given something meanwhile, the
     /// group is read on from its mark after the loop has taken it in its turn, but each read
     /// reads one message at least, so neither waits behind the other for long; once the driver
-    /// has ended, nothing more is read, and the next driver reads on from the mark (D-139).
+    /// has ended, nothing more is read, and the next driver reads on from the mark (D-139). A
+    /// driver whose output hid its end refuses that message's prompt as one that has ended: it
+    /// was never given, and the mark stays before it.
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
         self.behind.remove(&group);
+        // The next driver reads on from the mark (D-139).
+        if self.gone {
+            return Ok(());
+        }
         let mark = match self.read.get(&group) {
             Some(&mark) => mark,
             None => match self.start_of(&group)? {
@@ -1064,14 +1085,19 @@ impl<D: Driver, M: Side> Core<D, M> {
             // never given: the core ends, and the next driver is given it, once (D-139). What it
             // gave meanwhile is taken in its turn of the loop, and this group's turn comes after,
             // once one message is read: a driver that always has more does not hold it up (#167).
-            if handed == READS || (self.driver_ready().await && (handed > 0 || self.ended)) {
+            let ready = handed < READS && self.driver_ready().await;
+            if handed == READS || (ready && (handed > 0 || self.ended)) {
                 // The rest of the page is read again from the mark next turn.
                 self.read_through(&group);
                 self.behind.insert(group);
                 return Ok(());
             }
+            // With output ready, the look could not see whether the driver had ended: a refusal
+            // that says it had shows it was never given the message (#257).
+            self.unseen = ready;
             self.handle(message).await?;
-            if self.waits(&group) {
+            self.unseen = false;
+            if self.waits(&group) || self.gone {
                 return Ok(());
             }
         }
@@ -1260,9 +1286,15 @@ impl<D: Driver, M: Side> Core<D, M> {
                 return Ok(());
             }
         };
-        self.read.insert(group, order);
+        self.read.insert(group.clone(), order);
         // Saved before the first act, or at the end when there is none.
-        self.carry_out(acts).await
+        self.carry_out(acts).await?;
+        if self.gone {
+            // Never given: the mark goes back before it, for the next driver (D-139).
+            self.read.insert(group, read);
+            return self.save();
+        }
+        Ok(())
     }
 
     /// MDK could not read the group for a moment: it is read again from its mark later, longer
@@ -1299,6 +1331,11 @@ impl<D: Driver, M: Side> Core<D, M> {
         Ok(match act {
             Act::Prompt(prompt) => {
                 let result = self.driver.prompt(prompt.clone()).await;
+                // A driver the core did not see had ended was never given it, and nobody is told.
+                if self.unseen && result.as_ref().is_err_and(|r| r.ended) {
+                    self.gone = true;
+                    return Ok(Vec::new());
+                }
                 self.conversation.prompted(&prompt, result)
             }
             Act::Answer(answer) => {
@@ -1659,6 +1696,7 @@ async fn upload(
                     reason: Reason::Failed,
                     detail: Some("It could not be uploaded or sent.".into()),
                     unanswered: false,
+                    ended: false,
                 });
             }
         }
@@ -1671,6 +1709,7 @@ async fn upload(
         reason: Reason::Busy,
         detail: Some("The agent's account stayed busy. Try again later.".into()),
         unanswered: false,
+        ended: false,
     })
 }
 
@@ -2092,6 +2131,38 @@ mod tests {
             told <= 20 * WAITS as u32,
             "{told} of the burst went before the 20 stored messages"
         );
+    }
+
+    // A listing tried again reads every group, so a group it reads is not read again from
+    // `behind` in the same turn: each group hands on at most [`READS`] messages in a turn of the
+    // loop, and the rest of it in the next (#106).
+    #[tokio::test(start_paused = true)]
+    async fn a_listing_tried_again_and_a_group_behind_share_one_turns_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = format!(
+            "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{}\"\n[connector]\n",
+            "ab".repeat(32)
+        );
+        let config = Config::parse(&settings).unwrap();
+        let read = Arc::new(Mutex::new(Vec::new()));
+        let side = Backlog {
+            agent: PubKey::from("agent"),
+            messages: 40,
+            read: read.clone(),
+        };
+        let driver = Burst {
+            ready: 0,
+            told: Arc::default(),
+        };
+        let mut core = Core::new(side, driver, &config, Store::new(dir.path())).unwrap();
+        let group = GroupKey::from("g");
+        core.read.insert(group.clone(), 0);
+        core.behind.insert(group.clone());
+        core.listing = Again::after(None);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        core.read_again().await.unwrap();
+        assert_eq!(read.lock().unwrap().len(), READS, "one turn's reads");
+        assert!(core.behind.contains(&group), "the rest in the next turn");
     }
 
     /// Uploads a small file from a folder of its own to `side`, and says how it went and how long

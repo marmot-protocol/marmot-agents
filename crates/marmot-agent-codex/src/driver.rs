@@ -886,6 +886,7 @@ impl Codex {
                 reason: Reason::Invalid,
                 detail: Some("the driver has no such tool, or it was not given a path.".into()),
                 unanswered: false,
+                ended: false,
             });
             let reply = tool_reply(&id, &refused);
             let then = Written {
@@ -1709,7 +1710,7 @@ impl Driver for Codex {
 
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         self.begin();
         let chat = prompt.chat.id.clone();
@@ -1747,7 +1748,7 @@ impl Driver for Codex {
 
     async fn answer(&mut self, answer: Answer) -> Result<(), Refusal> {
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         self.begin();
         // A message cut short is finished first: it may be an answer to the same item.
@@ -1763,7 +1764,7 @@ impl Driver for Codex {
 
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         self.begin();
         let request = control.request.clone();

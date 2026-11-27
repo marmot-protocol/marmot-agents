@@ -485,6 +485,7 @@ impl Acp {
                 reason: Reason::Invalid,
                 detail: Some(detail.into()),
                 unanswered: false,
+                ended: false,
             };
             let _ = call.reply.send(Err(refused));
         };
@@ -1102,7 +1103,7 @@ impl Driver for Acp {
 
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         if !prompt.attachments.is_empty() {
             return Err(Refusal::new(Reason::NotSupported));
@@ -1163,7 +1164,7 @@ impl Driver for Acp {
 
     async fn answer(&mut self, answer: Answer) -> Result<(), Refusal> {
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         let (chat, text) = self.chat_with_item(&answer)?;
         // The reply's event, fed back, shows the answer: it settles it.
@@ -1172,7 +1173,7 @@ impl Driver for Acp {
 
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         let request = control.request.clone();
         match &control.action {
