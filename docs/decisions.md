@@ -3964,3 +3964,17 @@ decided: naming the exact failing test from machine-readable JUnit results tells
 fix without ever pulling test stdout/stderr or untrusted fork-PR text into the public issue.
 
 Decided 2026-11-27 (follow-up #184 to D-143).
+
+## D-172 An uninstall does not put back the plugin a `--replace-plugin` move replaced
+
+**Decision.** `--uninstall` of a Hermes or OpenClaw agent takes our plugin and its settings out of the gateway,
+and gives up a move left unfinished ([D-116](#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)),
+but it does not put back the old connector's plugin and settings that a finished `--replace-plugin` move
+replaced. Going back stays by hand, from the copies listed in `backups/before-move`, as [the move](move.md)
+("Going back") says.
+
+**Why.** Putting them back would change what an uninstall does to a person's gateway, and copying the old
+settings file back would wipe any edits made since the move, unless it merged them. Raised in
+[#89](https://github.com/marmot-protocol/marmot-agents/issues/89) and left out of its fix.
+
+Decided 2026-11-27. The project owner decided.
