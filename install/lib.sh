@@ -1177,6 +1177,9 @@ store_keep() {
             { ! first_start || : >"$record.new/moved"; } &&
             mv "$record.new" "$record"; } || die "the record of the agent's account home could not be written in $MA_UPGRADE"
     fi
+    # The launchers first: one an older release wrote would start the core on the home while its copy is
+    # put back, should the run fail before it writes them in its turn (D-173).
+    write_launchers
     # shellcheck disable=SC2086 # one service a line, without spaces
     services_stop $services ||
         die "the agent's services did not stop, so its account home was not copied: stop them, then run this again"
@@ -1231,26 +1234,31 @@ services_disable() {
     done
 }
 
+# The command that starts the services named.
+start_command() {
+    local service command=""
+    for service in "$@"; do
+        if [ "$OS" = Linux ]; then
+            command="${command:-systemctl --user start} $service"
+        else
+            command="${command:+$command && }launchctl bootstrap gui/$(id -u) $(sh_quote "$MA_LAUNCHD_DIR/$service.plist")"
+        fi
+    done
+    printf '%s' "$command"
+}
+
 # Says how to start the services of the agent a store record names, which are left stopped: an install
 # starts no agent because of an upgrade that was put back or that it did not make (D-159).
 services_hint() {
-    local service command=""
+    local command
     # Its home is as the import left it, and its new service was never started on it: starting that would
     # open the store, uncopied, with whatever core is in place by then.
     if [ -f "$1/moved" ]; then
         say "the agent \"${1##*/}\" is left stopped, its account home as marmot-agent import left it; run its installer again once what failed is fixed, or go back to today's connector as docs/move.md says (\"Going back\")"
         return 0
     fi
-    while IFS= read -r service; do
-        [ -n "$service" ] || continue
-        if [ "$OS" = Linux ]; then
-            command="${command:-systemctl --user start} $service"
-        else
-            command="${command:+$command && }launchctl bootstrap gui/$(id -u) $(sh_quote "$MA_LAUNCHD_DIR/$service.plist")"
-        fi
-    done <<EOF
-$(sed 1d "$1/where")
-EOF
+    # shellcheck disable=SC2046 # one service a line, without spaces
+    command=$(start_command $(sed 1d "$1/where"))
     [ -z "$command" ] ||
         say "the agent \"${1##*/}\" is left stopped; start it again with: $command"
 }
@@ -1285,13 +1293,14 @@ lease_home() {
     return 1
 }
 
-# The entries of a folder, one a line, but for MDK's lock and the folder of the socket.
+# The entries of a folder, each ended by a NUL, as a name may hold a newline, but for MDK's lock and the
+# folder of the socket.
 home_entries() {
     local entry
     for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
         [ -e "$entry" ] || [ -L "$entry" ] || continue
         case ${entry##*/} in .marmot-runtime.lock | socket) continue ;; esac
-        printf '%s\n' "$entry"
+        printf '%s\0' "$entry"
     done
 }
 
@@ -1302,11 +1311,9 @@ copy_home() {
     (
         umask 077
         [ -d "$to" ] || mkdir "$to" || exit 1
-        while IFS= read -r entry; do
-            [ -z "$entry" ] || cp -pR "$entry" "$to/" || exit 1
-        done <<EOF
-$(home_entries "$from")
-EOF
+        while IFS= read -r -d '' entry; do
+            cp -pR "$entry" "$to/" || exit 1
+        done < <(home_entries "$from")
         chmod "$(file_mode "$from")" "$to"
     )
 }
@@ -1332,13 +1339,13 @@ store_put_back() {
         return 1
     fi
     if : >"$record/restoring"; then
-        while IFS= read -r entry; do
-            [ -z "$entry" ] || rm -rf "$entry" || ok=1
-        done <<EOF
-$(home_entries "$home")
-EOF
+        while IFS= read -r -d '' entry; do
+            rm -rf "$entry" || ok=1
+        done < <(home_entries "$home")
         [ "$ok" -eq 1 ] || copy_home "$record/home" "$home" || ok=1
         [ "$ok" -eq 1 ] || rm -f "$record/restoring" || ok=1
+        # Left part removed or part copied, and marked, so that the agent's start refuses it.
+        [ "$ok" -eq 0 ] || printf 'error: %s\n' "the account home $home could not be put back whole (above), and is left incomplete: fix what failed, then run the installer again before you start the agent" >&2
     else
         ok=1
     fi
@@ -1394,9 +1401,9 @@ release_target() {
 
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
+        sha256sum <"$1" | awk '{print $1}'
     else
-        shasum -a 256 "$1" | awk '{print $1}'
+        shasum -a 256 <"$1" | awk '{print $1}'
     fi
 }
 
@@ -1849,14 +1856,9 @@ init_agent() {
         say "the agent keeps the identity it was imported with, in $MA_HOME"
         return 0
     fi
-    # A home a core has opened holds an identity already, and init would open its store with the new core,
-    # in an upgrade that keeps no copy of it, as with --no-start, or before the copy is kept (D-159).
-    if [ -d "$MA_HOME" ] && [ -n "$(home_entries "$MA_HOME")" ]; then
-        local why="the agent's account home $MA_HOME already holds an identity, but $MA_AGENT_DIR/public-key, which names it, is missing. Write the agent's public key into that file and run this again; or, to give the agent a new identity, move $MA_HOME away first"
-        [ "$DRY_RUN" -eq 1 ] || die "$why"
-        warn "a real run would stop here: $why"
-        return 0
-    fi
+    # The core refuses a home that holds an identity, as MDK's account records say, before it opens the
+    # home's store, which it would move forward uncopied (D-159, D-173). A home a first init was stopped in
+    # before it made one is used.
     if [ "$DRY_RUN" -eq 1 ]; then
         say "would run: $MA_CORE init $MA_SETTINGS"
         return 0
@@ -1893,6 +1895,12 @@ EOF
     printf '%s' "$content" | put "$MA_AGENT_DIR/service.env" 600
     {
         launcher_head "the core"
+        # A put back of the home under way, in a run of the installer that was stopped, leaves the home part
+        # removed or part copied until a run finishes it (store_put_back, D-159).
+        say "if [ -e $(sh_quote "$MA_UPGRADE/stores/$NAME/restoring") ]; then"
+        say "    echo 'marmot-agent: the account home is being put back as it was before an upgrade; run the installer again' >&2"
+        say "    exit 1"
+        say "fi"
         say "exec $(sh_quote "$MA_CORE") run $(sh_quote "$MA_SETTINGS")"
     } | put "$MA_AGENT_DIR/start" 700
     [ "$HARNESS_KIND" = socket ] || return 0
@@ -1997,14 +2005,16 @@ start_services() {
         # shellcheck disable=SC2086 # two unit names at most, without spaces
         act systemctl --user enable $units
         if [ "$NO_START" -eq 1 ]; then
-            say "the service is set up and enabled, not started: systemctl --user start $MA_UNIT"
+            # shellcheck disable=SC2046 # one service a line, without spaces
+            say "the service is set up and enabled, not started: $(start_command $(agent_services))"
             return 0
         fi
         # shellcheck disable=SC2086
         act systemctl --user restart $units
     else
         if [ "$NO_START" -eq 1 ]; then
-            say "the service is set up, not loaded: launchctl bootstrap gui/$(id -u) $MA_LAUNCHD_DIR/$MA_LABEL.plist"
+            # shellcheck disable=SC2046 # one service a line, without spaces
+            say "the service is set up, not loaded: $(start_command $(agent_services))"
             return 0
         fi
         for label in $labels; do

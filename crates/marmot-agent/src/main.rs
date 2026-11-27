@@ -12,6 +12,7 @@
 //!                                     take over one of today's connector installs (D-089)
 //! ```
 
+use marmot_account::AccountHome;
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
 use marmot_agent::import::{self, Options, Places};
@@ -88,13 +89,15 @@ fn fail(why: &str) -> ExitCode {
 /// Makes the agent's identity in its home: keys, relay lists and a key package, so it can be
 /// invited.
 async fn init(config: &Config) -> Result<(), String> {
-    let (home, _, runtime) = marmot::open(config)?;
-    if home
+    // Read from MDK's account records alone, before the store is opened: a newer core moves a store
+    // forward as it opens it, out of reach of the older core an upgrade may put back (D-159).
+    if AccountHome::open(&config.home)
         .accounts()
         .is_ok_and(|a| a.iter().any(|a| a.local_signing))
     {
         return Err("the home already has an identity".into());
     }
+    let (_, _, runtime) = marmot::open(config)?;
     let relays: Vec<cgka_traits::TransportEndpoint> = config
         .relays
         .iter()

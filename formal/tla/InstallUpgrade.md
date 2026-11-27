@@ -86,8 +86,11 @@ call `image_commit` and `change_begin` alike).
   puts back with the core
   ([D-159](../../docs/decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
   It is one more thing that goes with the record, as Pi's image tag does; `install/test_install.py` stops such an
-  upgrade at every step and checks that the store is always the core's (`Upgrade`,
-  `test_every_step_keeps_the_store_with_its_core`). Not modelled as of 2026-11-26.
+  upgrade at every step and checks the settled outcome: once nothing is left under way, after the stopped run or
+  the runs that follow a kill, the store is the core's (`Upgrade`, `test_every_step_keeps_the_store_with_its_core`).
+  It does not check the live home at each step: a kill as the store goes back leaves it part put back until the
+  next run finishes that (`test_a_kill_while_the_store_goes_back_is_finished_by_the_next_run`), and the agent's
+  start refuses it meanwhile. Not modelled as of 2026-11-26.
 - **Versions.** Every install installs the same new release; three releases would not change which steps run.
 
 ## Trusted assumptions

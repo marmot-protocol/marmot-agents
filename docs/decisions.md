@@ -3600,6 +3600,12 @@ the same day, that a put back leaves the agent's services stopped and prints how
 where it is kept, when the services stop, and the `init` guard were decided 2026-11-26 by the builder, under the
 project owner's instruction to decide minor points.
 
+The `init` guard ("No `init` on a home in use") is replaced by
+[D-173](#d-173-marmot-agent-init-refuses-a-home-with-an-identity-before-it-opens-its-store-and-no-core-starts-on-a-home-being-put-back): the core's
+`init` refuses a home that holds an identity before it opens the store, and the installer no longer refuses a home
+for holding other files. D-173 also says what a put back under way, or one that fails part way, keeps from
+starting. The rest stands.
+
 ## D-160 The coding installers take an install moved over, and run it as a service
 
 **Decision.** An install of today's connector for Codex, Claude Code, OpenCode, Pi or Goose moves over the way a
@@ -3978,3 +3984,33 @@ settings file back would wipe any edits made since the move, unless it merged th
 [#89](https://github.com/marmot-protocol/marmot-agents/issues/89) and left out of its fix.
 
 Decided 2026-11-27. The project owner decided.
+
+## D-173 `marmot-agent init` refuses a home with an identity before it opens its store, and no core starts on a home being put back
+
+**Decision.** Two points of
+[D-159](#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core), the first
+replaced, the second added:
+
+- **The `init` guard.** `marmot-agent init` reads MDK's account records in the home first, as it always decided
+  whether the home has an identity (an account that signs here), and refuses such a home before it opens the store.
+  The installer runs `init` whenever the agent has no `public-key` file, on a home that holds files too; `init`'s
+  refusal stops the install, which says to write the agent's public key into that file, or to move the home away
+  to give the agent a new identity. A home that a first install's `init` was stopped in before it made an identity
+  is used. So, as before, `init` never opens an identity's store with the new core uncopied.
+- **A home being put back.** While a put back of the agent's home is under way, marked in the upgrade's record
+  (`stores/<name>/restoring`), the agent's `start` launcher, which its service runs, refuses to run the core. A
+  service manager that starts the agent after a kill and a reboot, before the installer runs again, so finds the
+  home part removed or part copied and starts no core on it. An upgrade writes the launchers again before it copies
+  the home, so that one an older release wrote, without this refusal, is never beside a put back of that copy. A
+  put back whose copy fails part way keeps the mark, and the installer says that the home is incomplete, and to
+  fix what failed and run the installer again before starting the agent. The run that finishes the put back removes the mark, as D-159 has it.
+
+**Why.** Issue #215: a first install whose `init` was stopped before it made an identity left files in the home, and
+the next run refused it as a home that held one, asking for a public key that did not exist. Asking whether a home
+holds an identity is the core's, through MDK; read in the shell it would be MDK's layout copied. Issue #217, from
+CodeRabbit's review of #216: a kill during a put back, then a reboot, let the enabled service start the new core on
+the home half put back, and a put back that failed part way said only to run the installer again once nothing held
+the home.
+
+Decided 2026-11-27 by the builder, under the project owner's instruction to decide minor points. The `init` guard
+it replaces was the builder's too.

@@ -1278,6 +1278,70 @@ async fn the_groups_command_reads_the_agents_home() {
     );
 }
 
+// `marmot-agent init` on a home that holds an identity, as MDK's account records say, refuses before
+// it opens the home's store, which a newer core would move forward where an older one cannot open
+// it (D-159, D-173). A home whose first `init` was stopped before it made an identity is not refused
+// (#215): the installer leaves that rule to the core.
+#[test]
+fn init_refuses_a_home_with_an_identity_before_it_opens_its_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("agent");
+    let record = home.join("accounts/agent/account.json");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(
+        &record,
+        format!(
+            "{{\"label\":\"agent\",\"account_id_hex\":\"{}\",\"local_signing\":true}}",
+            "ab".repeat(32)
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&record, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let settings = dir.path().join("settings.toml");
+    std::fs::write(
+        &settings,
+        format!(
+            "home = {home:?}\nrelays = []\nowner = \"{owner}\"\n\n[connector]\n",
+            home = home.display().to_string(),
+            owner = "cd".repeat(32),
+        ),
+    )
+    .unwrap();
+    let init = std::process::Command::new(env!("CARGO_BIN_EXE_marmot-agent"))
+        .arg("init")
+        .arg(&settings)
+        .output()
+        .unwrap();
+    assert!(!init.status.success());
+    assert!(
+        String::from_utf8_lossy(&init.stderr).contains("the home already has an identity"),
+        "{init:?}"
+    );
+    let found: Vec<_> = walk(&home)
+        .into_iter()
+        .map(|p| p.strip_prefix(&home).unwrap().display().to_string())
+        .collect();
+    assert_eq!(
+        found,
+        ["accounts", "accounts/agent", "accounts/agent/account.json"],
+        "nothing else in the home was made or opened"
+    );
+}
+
+/// Every path under a folder, sorted.
+fn walk(folder: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        }
+        found.push(path);
+    }
+    found.sort();
+    found
+}
+
 /// A stand-in for a harness whose subagents the test scripts: each prompt is handed to the test,
 /// and what the test hands back is what the driver says (D-121).
 struct Scripted {

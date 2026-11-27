@@ -860,6 +860,23 @@ class Install(unittest.TestCase):
         self.assertTrue((agent / "home").is_dir())
         self.assertIn(f"kept the agent's folder, with its settings and identity: {agent}", out)
 
+    def test_a_first_install_whose_init_was_stopped_runs_init_again(self):
+        """#215: a first install stopped in `marmot-agent init` before it made an identity leaves files in
+        the account home and no public-key file. The next run runs init again, which alone decides whether
+        the home holds an identity, and makes the agent's identity; it is not refused for the files."""
+        m = Machine(self)
+        home = m.data / "agents/codex/home"
+        m.write(m.core, FAKE_CORE.replace(
+            "    init) home=", f'    init) mkdir -p "{home}"; echo partial >"{home}/app.sqlite"; exit 1 ;;\n    unused) home='))
+        stopped = m.run("codex", *m.args("codex", "--binary", str(m.core)), check=False)
+        self.assertNotEqual(stopped.returncode, 0)
+        self.assertTrue((home / "app.sqlite").is_file())
+        m.write(m.core, FAKE_CORE)
+        m.log.write_text("")
+        m.run("codex", *m.args("codex", "--binary", str(m.core)))
+        self.assertIn(f"marmot-agent init {m.data}/agents/codex/settings.toml", m.calls())
+        self.assertEqual((m.data / "agents/codex/public-key").read_text().strip(), AGENT_KEY)
+
     def test_socket_harness(self):
         m = Machine(self)
         m.run("claude-code", *m.args("claude-code", "--binary", str(m.core), "--name", "helper",
@@ -2720,29 +2737,97 @@ exec {rm} "$@"
         self.assertNotIn("systemctl --user stop marmot-agent-first.service marmot-agent-first-connector.service",
                          m.calls(), "the same core again opens no store anew, so none is copied")
 
-    def test_init_is_refused_on_a_home_in_use(self):
-        """An agent whose public-key file was lost, with a home a core has opened: the install stops before
-        `marmot-agent init`, which would open the store with the new core, uncopied with --no-start, and
-        says what to do; the older core and its store are as they were."""
+    def test_init_refused_on_a_home_with_an_identity_puts_the_upgrade_back(self):
+        """An agent whose public-key file was lost, with a home that holds an identity: `marmot-agent init`
+        refuses it, before it opens the store (the core's own test, D-173), and the install stops, says what
+        to do, and puts back the older core; its store is as it was, with --no-start too."""
         for no_start in (False, True):
             with self.subTest(no_start=no_start):
                 m = Machine(self)
                 self.older_store(m)
                 (m.data / "agents/first/public-key").unlink()
-                store = m.data / self.STORE / "accounts/agent"
                 m.write(m.core, FAKE_CORE.replace(
-                    "    init) home=",
-                    f'    init) echo new >"{store}/session.sqlite"; echo new >"{store}/session.sqlite-wal"\n'
-                    '        echo "the home already has an identity" >&2; exit 1 ;;\n    unused) home='))
-                m.log.write_text("")
+                    "    init) home=", '    init) echo "the home already has an identity" >&2; exit 1 ;;\n    unused) home='))
                 failed = m.run(self.HARNESS, *self.store_args(m), *(["--no-start"] if no_start else []), check=False)
                 self.assertNotEqual(failed.returncode, 0)
-                self.assertNotIn("marmot-agent init", "\n".join(m.calls()))
-                self.assertIn(f"the agent's account home {m.data / self.STORE} already holds an identity", failed.stderr)
-                self.assertIn("Write the agent's public key into that file", failed.stderr)
+                self.assertIn("the home already has an identity", failed.stderr)
+                self.assertIn(f"write its public key into {m.data}/agents/first/public-key", failed.stderr)
                 self.assertEqual(self.shared_generations(m), {"core": "older", "install files": "older"})
                 self.assertEqual(self.store_of(m), "older", failed.stderr)
                 self.no_copy(m)
+
+    def test_the_core_does_not_start_on_a_home_being_put_back(self):
+        """#217: while a put back of the agent's home is under way, marked in the upgrade's record, the
+        agent's start refuses to run the core, which a service manager could start on the home part put
+        back, as after a reboot; once the put back is finished, it runs the core."""
+        m = Machine(self)
+        self.older_store(m)
+        record = m.data / "upgrade/stores/first"
+        record.mkdir(parents=True)
+        (record / "restoring").touch()
+        m.log.write_text("")
+        start = [str(m.data / "agents/first/start")]
+        env = {"HOME": str(m.home), "PATH": f"{m.bin}:{SYSTEM_PATH}", "FAKE_LOG": str(m.log)}
+        refused = subprocess.run(start, env=env, capture_output=True, text=True)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("is being put back as it was before an upgrade; run the installer again", refused.stderr)
+        self.assertEqual(m.calls(), [])
+        (record / "restoring").unlink()
+        subprocess.run(start, env=env, check=True)
+        self.assertIn(f"marmot-agent run {m.data}/agents/first/settings.toml", m.calls())
+
+    def test_the_start_refuses_a_home_being_put_back_before_the_copy_is_kept(self):
+        """#217: an agent whose start an older release wrote, without that refusal: an upgrade writes the start
+        again before it stops the agent to copy its home, so that no put back of that copy, as after a step
+        that fails before the launchers are written in their turn, runs beside a start that would let a
+        service manager run the core on the home part put back."""
+        m = Machine(self)
+        self.older_store(m)
+        start = m.data / "agents/first/start"
+        start.write_text("".join(line for line in start.read_text().splitlines(keepends=True)
+                                 if "restoring" not in line and not line.startswith(("    ", "fi"))))
+        self.assertNotIn("restoring", start.read_text())
+        pause = m.dir / "pause"
+        run = m.start(self.HARNESS, *self.store_args(m),
+                      env={"FAKE_PAUSE": "systemctl --user stop", "FAKE_PAUSE_AT": str(pause)})
+        self.addCleanup(run.kill)
+        m.until(lambda: pause.with_name("pause.reached").exists(), lambda: run.poll() is not None)
+        self.assertTrue(pause.with_name("pause.reached").exists(), m.output(run))
+        self.assertFalse((m.data / "upgrade/stores/first/home").exists(), "the copy is not kept yet")
+        self.assertIn(f"{m.data}/upgrade/stores/first/restoring", start.read_text())
+        pause.touch()
+        self.assertEqual(run.wait(timeout=120), 0, m.output(run))
+
+    def test_a_home_that_cannot_be_copied_back_whole_says_so(self):
+        """#217: a put back whose copy fails part way leaves the home incomplete, and marked: the error says
+        to fix what failed and run the installer again before starting the agent, and that run finishes it."""
+        m = Machine(self)
+        self.older_store(m)
+        home = m.data / self.STORE
+        cp = shutil.which("cp", path=SYSTEM_PATH)
+        m.write(m.bin / "cp", f'#!/bin/sh\nfor last; do :; done\n[ "$last" != "{home}/" ] || exit 1\nexec {cp} "$@"\n')
+        failed = m.run(self.HARNESS, *self.store_args(m), env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn(f"the account home {home} could not be put back whole (above), and is left incomplete: fix "
+                      "what failed, then run the installer again before you start the agent", failed.stderr)
+        self.assertTrue((m.data / "upgrade/stores/first/restoring").is_file())
+        (m.bin / "cp").unlink()
+        m.run(self.HARNESS, *self.store_args(m))
+        self.assertEqual(self.store_of(m), "new")
+        self.no_copy(m)
+
+    def test_a_name_with_a_newline_is_copied_and_put_back(self):
+        """#217: an entry of the account home whose name holds a newline is copied and put back whole, as
+        any other."""
+        m = Machine(self)
+        self.older_store(m)
+        odd = m.data / self.STORE / "line\nbreak"
+        odd.write_text("kept\n")
+        failed = m.run(self.HARNESS, *self.store_args(m), env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+        self.assertIn("put back the account home", failed.stdout, failed.stderr)
+        self.assertEqual(odd.read_text(), "kept\n")
+        self.assertEqual(self.store_of(m), "older")
+        self.no_copy(m)
 
     def test_a_kill_while_the_store_goes_back_is_finished_by_the_next_run(self):
         """An upgrade that fails once the new core has opened the store, killed at any step as it puts the
@@ -2773,6 +2858,8 @@ exec {rm} "$@"
                 wrong = None
                 if ran.returncode != 0:
                     wrong = "the run failed"
+                elif then == "no-start" and self.START not in ran.stdout:
+                    wrong = "how to start all of the agent's services is not said"
                 elif (m.data / "upgrade").exists():
                     wrong = "something is left under way"
                 elif starts:
@@ -2878,13 +2965,25 @@ exec {rm} "$@"
         record.mkdir()
         (record / "where").write_text("/the home\norg.marmot.marmot-agent.first\norg.marmot.marmot-agent.first.connector\n")
         launchd = "/Users/some one/Library/LaunchAgents"
-        said = subprocess.run(["bash", "-c", f'. "{HERE}/lib.sh"; OS=Darwin; MA_LAUNCHD_DIR="$1"; services_hint "$2"',
-                               "bash", launchd, str(record)], capture_output=True, text=True, check=True).stdout
+        said = subprocess.run(["bash", "-c", '. "$1"; OS=Darwin; MA_LAUNCHD_DIR="$2"; services_hint "$3"',
+                               "bash", str(HERE / "lib.sh"), launchd, str(record)],
+                              capture_output=True, text=True, check=True).stdout
         command = said.split("start it again with: ", 1)[1].strip()
         uid = os.getuid()
         self.assertEqual(shlex.split(command), [
             "launchctl", "bootstrap", f"gui/{uid}", f"{launchd}/org.marmot.marmot-agent.first.plist", "&&",
             "launchctl", "bootstrap", f"gui/{uid}", f"{launchd}/org.marmot.marmot-agent.first.connector.plist"])
+
+    def test_the_checksum_of_a_file_whose_name_holds_a_backslash(self):
+        """#217: the checksum a store copy is kept for is the file's, whatever its name: sha256sum escapes a
+        name with a backslash, and marks its line so, which the hash taken from its first field then held."""
+        folder = Path(tempfile.mkdtemp(prefix="marmot-install-"))
+        self.addCleanup(shutil.rmtree, folder, True)
+        core = folder / "back\\slash"
+        core.write_text("a core\n")
+        said = subprocess.run(["bash", "-c", '. "$1"; sha256_of "$2"', "bash", str(HERE / "lib.sh"), str(core)],
+                              capture_output=True, text=True, check=True).stdout
+        self.assertEqual(said.strip(), hashlib.sha256(b"a core\n").hexdigest())
 
 class TwoAgents(unittest.TestCase):
     """Two agents of one gateway harness in one home share the core and the support files, and each
