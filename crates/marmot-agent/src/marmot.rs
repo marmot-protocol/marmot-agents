@@ -32,6 +32,8 @@ const CHAT: u64 = 9;
 const QUOTE_DELETED: &str = "[this message was deleted]";
 /// And in place of one the chat no longer shows for another reason.
 const QUOTE_GONE: &str = "[this message is not available]";
+/// How much of a message a quote holds, in characters (D-187).
+const QUOTE_MAX_CHARS: usize = 2_000;
 
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
 /// This is what first opens the store, which MDK upgrades forward only. MDK holds the home for as
@@ -468,7 +470,7 @@ impl Marmot {
             .map_err(|_| NotNow)?;
         let text = match shown {
             Some(shown) if shown.deleted => QUOTE_DELETED.to_owned(),
-            Some(shown) if !shown.invalidated => shown.plaintext,
+            Some(shown) if !shown.invalidated => excerpt(shown.plaintext),
             _ => QUOTE_GONE.to_owned(),
         };
         let author = PubKey(record.sender);
@@ -827,6 +829,15 @@ enum Taken {
 /// it with a notice (S7).
 fn too_large() -> AppError {
     AppError::InvalidAppMessagePayload("over the size limit".into())
+}
+
+/// The start of a message, for a quote: all of it when it fits, or else its first
+/// [`QUOTE_MAX_CHARS`] characters and a mark that it was cut.
+fn excerpt(text: String) -> String {
+    match text.char_indices().nth(QUOTE_MAX_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text,
+    }
 }
 
 /// Whether `message` is the first event, or an edit, of a session item (D-175). Who sent it is the
@@ -1285,6 +1296,16 @@ impl Side for Marmot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #267. A long message is quoted by its first 2,000 characters, cut between characters and
+    // marked as cut; one that fits is quoted whole, with no mark.
+    #[test]
+    fn a_long_quote_is_cut_between_characters_and_says_so() {
+        let fits = "é".repeat(QUOTE_MAX_CHARS);
+        assert_eq!(excerpt(fits.clone()), fits);
+        let cut = excerpt(format!("{fits}and more"));
+        assert_eq!(cut, format!("{fits}…"));
+    }
 
     /// MDK's words, at the revision the core links (`marmot-app`'s `local_submissions.rs`), for a
     /// send under a new token whose event is one MDK already keeps: the same kind, tags, content
