@@ -113,6 +113,12 @@ struct Subagent {
     subject: Option<String>,
     /// What it is for: its path, or what it was asked.
     description: Option<String>,
+    /// Whether `subject` was given for the turn running now. A turn that starts before the item
+    /// that gives it work shows the last turn's until that item comes (#146).
+    claimed: bool,
+    /// Every item that has given it work. Codex names each more than once (its start, its end),
+    /// and only the first gives work: a repeat read late, after newer work, gives none (#146).
+    given: HashSet<String>,
     /// The turn the person started that its last turn ran under: what it says between turns
     /// belongs to.
     root: Option<String>,
@@ -225,12 +231,11 @@ impl Translator {
     }
 
     /// The item that gave a subagent its work, and what that work is, as its next turn shows them:
-    /// the newest given waits for that turn (`next`). A task already running with no subject,
-    /// because its turn started before the item that names it came, takes them now: the events
-    /// returned show it. A task running with a subject keeps it, and its words theirs. Codex
-    /// names one item more than once (its start, its end): a repeat of the item the running or
-    /// last task names gives no new work. Nothing for a translator that follows the chat's
-    /// session.
+    /// the newest given waits for that turn (`next`). A task already running with no work given
+    /// for its turn, because the turn started before the item that names it came, takes them now:
+    /// the events returned show it. A task running with work given for it keeps it, and its words
+    /// theirs. Codex names one item more than once (its start, its end): only the first gives
+    /// work. Nothing for a translator that follows the chat's session.
     pub fn given_work(&mut self, subject: &str, description: Option<&str>) -> Vec<AgentEvent> {
         let mut out = Vec::new();
         let item = self.turn_item(self.turn.as_deref());
@@ -238,18 +243,12 @@ impl Translator {
         let Some(sub) = self.subagent.as_mut() else {
             return out;
         };
-        let description = description.filter(|d| !d.is_empty()).map(String::from);
-        let has_subject = match running.as_ref().map(AgentEvent::body) {
-            Some(Body::Task(task)) => task.subject.is_some(),
-            _ => true,
-        };
-        if has_subject {
-            if sub.subject.as_deref() != Some(subject) {
-                sub.next = Some((subject.to_string(), description));
-            }
+        if !sub.given.insert(subject.to_string()) {
             return out;
         }
-        let Some(prev) = running else {
+        let description = description.filter(|d| !d.is_empty()).map(String::from);
+        let Some(prev) = running.filter(|_| !sub.claimed) else {
+            sub.next = Some((subject.to_string(), description));
             return out;
         };
         let Body::Task(task) = prev.body() else {
@@ -257,11 +256,12 @@ impl Translator {
         };
         sub.subject = Some(subject.to_string());
         sub.description = description.or(sub.description.take());
+        sub.claimed = true;
         let sub = sub.clone();
         let native = prev.native().cloned();
         let body = Body::Task(Task {
             kind: task.kind.clone(),
-            description: task.description.clone().or(sub.description.clone()),
+            description: sub.description.clone(),
             subject: sub.subject.clone().map(Into::into),
         });
         let base = sub.description.clone().unwrap_or_default();
@@ -436,10 +436,8 @@ impl Translator {
             return;
         };
         let params = m.params.map_or("{}", RawValue::get);
-        let thread = named_thread(params);
-        let other = thread.is_some() && self.session.is_some() && thread != self.session;
         if method == "item/tool/call"
-            || other
+            || self.names_another_thread(named_thread(params).as_deref())
             || self.asked.contains_key(id)
             || self.outbox.len() > replies
         {
@@ -533,12 +531,19 @@ impl Translator {
         self.handle(method, m, params, out);
     }
 
-    /// Whether a message names a thread that is not the session, once there is one. It is
-    /// counted, and makes no event.
+    /// Whether a message names a thread that is not the session. It is counted, and makes no
+    /// event.
     fn for_another_thread(&mut self, thread: Option<&str>) -> bool {
-        let other = thread.is_some() && self.session.is_some() && thread != self.session.as_deref();
+        let other = self.names_another_thread(thread);
         self.other_threads += u64::from(other);
         other
+    }
+
+    /// Whether `thread` is named and is not the session. Before the reply to `thread/start` or
+    /// `thread/resume` picks the session, every thread is another's (D-060), so nothing Codex says
+    /// of a thread can report on, or change, a session not yet picked (#37).
+    fn names_another_thread(&self, thread: Option<&str>) -> bool {
+        thread.is_some() && thread != self.session.as_deref()
     }
 
     fn handle(&mut self, method: &str, m: &Envelope<'_>, params: &str, out: &mut Vec<AgentEvent>) {
@@ -635,6 +640,7 @@ impl Translator {
         if let Some(sub) = self.subagent.as_mut() {
             sub.latest = self.turn.clone();
             // Work given while the last turn ran is this one's.
+            sub.claimed = sub.next.is_some();
             if let Some((subject, description)) = sub.next.take() {
                 sub.subject = Some(subject);
                 sub.description = description.or(sub.description.take());

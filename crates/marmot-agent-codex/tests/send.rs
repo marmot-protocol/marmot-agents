@@ -398,6 +398,7 @@ fn translator_session(events: &[AgentEvent]) -> Option<String> {
 fn a_decision_codex_offers_as_an_object_is_sent_back_whole() {
     let request = r#"{"id": 3, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "python3 greet.py", "availableDecisions": ["accept", {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["python3", "greet.py"]}}, "cancel"]}}"#;
     let mut translator = Translator::new();
+    started(&mut translator);
     let events = translator.feed(Direction::In, request);
     let Body::Approval(approval) = events[0].body() else {
         panic!("an approval");
@@ -498,6 +499,7 @@ fn a_session_is_replaced_only_while_idle_and_once_at_a_time() {
 fn a_permission_grant_is_answered_in_codexs_shape() {
     let asked = r#"{"id": 9, "method": "item/permissions/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "call9", "cwd": "/w", "reason": "needs the network", "permissions": {"network": {"enabled": true}}}}"#;
     let mut translator = Translator::new();
+    started(&mut translator);
     let events = translator.feed(Direction::In, asked);
     let reply = |choice: &str| {
         let given = Given::Choice(choice.into());
@@ -571,6 +573,7 @@ fn a_prompt_needs_its_own_session() {
 #[test]
 fn an_approval_closed_at_the_turns_end_takes_no_answer() {
     let mut translator = Translator::new();
+    started(&mut translator);
     let asked = translator.feed(
         Direction::In,
         r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
@@ -589,6 +592,7 @@ fn an_approval_closed_at_the_turns_end_takes_no_answer() {
 #[test]
 fn an_approval_codex_resolved_takes_no_answer() {
     let mut translator = Translator::new();
+    started(&mut translator);
     let asked = translator.feed(
         Direction::In,
         r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
@@ -662,6 +666,7 @@ fn nothing_but_an_interrupt_is_built_while_codex_has_yet_to_answer() {
 #[test]
 fn a_second_answer_is_told_it_was_already_answered() {
     let mut translator = Translator::new();
+    started(&mut translator);
     let asked = translator.feed(
         Direction::In,
         r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
@@ -679,6 +684,7 @@ fn a_second_answer_is_told_it_was_already_answered() {
 fn an_mcp_form_is_declined_at_once() {
     let form = r#"{"id": 5, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Upload", "requestedSchema": {"type": "object", "properties": {"city": {"type": "string"}}}}}"#;
     let mut translator = Translator::new();
+    started(&mut translator);
     let events = translator.feed(Direction::In, form);
     assert!(
         matches!(events[0].body(), Body::Notice(_)),
@@ -709,6 +715,7 @@ fn command_approval(decisions: &str) -> String {
 fn a_choice_does_what_its_decision_does() {
     let decisions = r#"["accept", {"applyNetworkPolicyAmendment": {"network_policy_amendment": {"action": "allow", "host": "example.org"}}}, {"applyNetworkPolicyAmendment": {"network_policy_amendment": {"action": "deny", "host": "example.org"}}}, {"somethingNew": {}}, "cancel"]"#;
     let mut translator = Translator::new();
+    started(&mut translator);
     let events = translator.feed(Direction::In, &command_approval(decisions));
     let Body::Approval(approval) = events[0].body() else {
         panic!("an approval");
