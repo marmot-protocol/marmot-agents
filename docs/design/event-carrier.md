@@ -2,10 +2,10 @@
 
 Status: decided on 2026-11-17, as [D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)
 to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). Who applies the size limit was decided on
-2026-11-19, as [D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit). None of it is in the Marmot
-specification yet, and all of it has to be agreed there
-([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)); it is proposed there as one feature
-document ([D-184](../decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)). The exact tags are in
+2026-11-19, as [D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit). The Marmot
+specification adopted it on 2026-11-28 as one feature document, `features/agents-in-chats.md`
+([D-190](../decisions.md#d-190-the-marmot-specification-adopts-agents-in-chats)), which is the contract; this page
+is the design behind it. The exact tags are in
 [kinds 1201 and 1202](agent-kinds.md) ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)). What
 the core cuts beyond the two steps under "the size limit" is provisional, as noted there. MDK carries all of it
 since 2026-11-22 (MDK pull request 3613), and the core sends it

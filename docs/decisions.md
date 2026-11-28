@@ -4427,3 +4427,41 @@ beside the text then.
 
 Decided 2026-11-27. The project owner accepted the builder's recommendation to name the files; the builder
 chose the form.
+
+## D-189 A waiting approval keeps the action an answer agrees to
+
+**Decision.** A later version of an approval item that is still `waiting` keeps its `subject` and its choices'
+ids and effects. A different action is a new approval item. A label may still be shortened to fit the size limit
+([D-057](#d-057-the-core-applies-the-64-kb-limit)).
+
+**Why.** An answer, kind 1202 with a `choice`, names only the approval's first event and a choice id. If a later
+version could change what the approval covers, a delayed answer to the earlier version would approve the changed
+action. Every driver already works this way: each builds an approval once per harness request, under a new item id,
+and a later version only adds `answer`. Nothing stated it, so the core does not check it, and a driver could break it
+unseen. The Marmot specification takes it as a rule for the agent
+([D-190](#d-190-the-marmot-specification-adopts-agents-in-chats)).
+
+Decided 2026-11-28. The project owner adopted the specification that carries it; the rule came from a review of
+that specification (marmot pull request 524).
+
+## D-190 The Marmot specification adopts agents in chats
+
+**Decision.** What D-184 proposed is adopted: `features/agents-in-chats.md` in the Marmot specification
+(`marmot-protocol/marmot`, pull requests 524 and 525) defines kinds 1201 and 1202, the versions of an item as kind
+1009, and the tags on the agent's words. It is the contract a second client builds against. Its section on subagent
+threads stays non-normative until the specification defines threads. Issue #156 is closed by it.
+
+The specification follows MDK where the two differ; the core changes to match it. In checking the draft for adoption,
+three points were brought to what MDK does: a first event that convergence withdraws shows as a withdrawn message,
+with no versions applied; an app without threads quotes `started_by` above any item that carries it; and a reader
+takes any number of `settles`. One rule the core does not follow yet: the specification lets a `set`, `own` or
+`new_session` name the agent's current session item whatever its state, and the core refuses one that names a
+session item whose session has ended
+([#282](https://github.com/marmot-protocol/marmot-agents/issues/282)).
+
+**Why.** A second client needs a contract it can implement without reading MDK
+([Q-03](open-questions.md#q-03-where-are-the-event-kinds-specified)). The draft had two rounds of review and every
+passage it marked as inferred was checked against MDK and the core.
+
+Decided 2026-11-28. The project owner decided to adopt it.
+

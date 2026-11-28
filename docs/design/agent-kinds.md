@@ -19,8 +19,9 @@ that writes and reads them is `crates/marmot-agent/src/carrier.rs`. What was
 [an item in a subagent's thread](#an-item-in-a-subagents-thread) were decided on 2026-11-23
 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them),
 [D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)) and built on
-2026-11-24. The page is proposed to the Marmot specification as part of a feature document
-([D-184](../decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)).
+2026-11-24. The Marmot specification adopted what this page describes on 2026-11-28, in `features/agents-in-chats.md`
+([D-190](../decisions.md#d-190-the-marmot-specification-adopts-agents-in-chats)); where the two differ, the
+specification is the contract.
 
 ## What M1 showed
 

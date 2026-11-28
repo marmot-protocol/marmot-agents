@@ -3,9 +3,9 @@
 Status: decided on 2026-11-18, as [D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)
 to [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights), and [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt)
 to [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat). Later decisions
-that came from the recordings are listed [at the end](#what-was-decided). None of it is in the Marmot
-specification yet; it is proposed there as part of one feature document
-([D-184](../decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)). The
+that came from the recordings are listed [at the end](#what-was-decided). The Marmot
+specification adopted it on 2026-11-28, as part of `features/agents-in-chats.md`
+([D-190](../decisions.md#d-190-the-marmot-specification-adopts-agents-in-chats)). The
 exact tags were fixed on 2026-11-21 ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)) and are in
 [kinds 1201 and 1202](agent-kinds.md#kind-1202-an-answer-or-a-control).
 
