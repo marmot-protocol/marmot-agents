@@ -115,11 +115,10 @@ ownership, and how much is specification versus app convention, is not settled. 
 [plan](plan.md) writes the specification here, from what the first end-to-end test shows, for MDK to build:
 [kinds 1201 and 1202](design/agent-kinds.md) (D-076).
 
-Narrowed on 2026-11-27: the definition is proposed to the Marmot specification as one feature document,
-`features/agents-in-chats.md`, with edits to two of its foundation documents
-([D-184](decisions.md#d-184-the-specification-of-agents-in-chats-is-proposed-to-the-marmot-repository)). Still
-open: whether the Marmot repository takes it, and in what form; and where the subagent threads go, since the
-specification does not yet define threads.
+Settled on 2026-11-28, except for threads: the Marmot specification adopts the definition as one feature
+document, `features/agents-in-chats.md`
+([D-190](decisions.md#d-190-the-marmot-specification-adopts-agents-in-chats)). Still open: where the subagent
+threads go, since the specification does not yet define threads; its section on them is not normative.
 
 ## The socket protocol
 
